@@ -1,6 +1,7 @@
 # MCP Router
 
 MCP Router 是一个模型上下文协议（MCP）路由/代理系统，作为MCP服务端和客户端，支持动态管理MCP工具配置，解决LLM无法区分同名工具的问题。
+[![Upload Python Package](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml/badge.svg)](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml)
 
 ## 特性
 
