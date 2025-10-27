@@ -1,7 +1,11 @@
 # MCP Router
 
+[![PyPI Publish](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml/badge.svg)](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 MCP Router 是一个模型上下文协议（MCP）路由/代理系统，作为MCP服务端和客户端，支持动态管理MCP工具配置，解决LLM无法区分同名工具的问题。
-[![Upload Python Package](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml/badge.svg)](https://github.com/ChuranNeko/mcp_router/actions/workflows/python-publish.yml)
 
 ## 特性
 
@@ -62,21 +66,33 @@ mcp_router/
 
 ### 环境要求
 
-- Python 3.9+
-- uv (推荐) 或 pip
+- Python 3.10+
+- uv (推荐) 或 pip 或 conda
 
 ### 安装
+
+**从 PyPI 安装（推荐）：**
+
+```bash
+pip install mcp-router
+```
+
+**从源码安装：**
 
 ```bash
 # 使用 uv (推荐)
 uv venv .venv
-uv pip install -r requirements.txt
+uv pip install -e ".[dev]"
 
 # 或使用 pip
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 source .venv/bin/activate  # Linux/Mac
-pip install -r requirements.txt
+pip install -e ".[dev]"
+
+# 或使用 conda
+conda env create -f environment.yml
+conda activate mcp_router
 ```
 
 ### 配置
@@ -236,14 +252,40 @@ MCP Router 提供以下工具给 LLM 使用：
 }
 ```
 
-## 测试
+## 开发
 
-本项目配置了 GitHub Actions CI，每次推送到 main 分支时会自动运行所有测试。
+### 代码风格
 
-测试包含：
-- 单元测试：路由器、API、安全验证
-- 集成测试：完整的端到端测试
-- 测试覆盖率报告
+本项目使用 [Ruff](https://github.com/astral-sh/ruff) 进行代码格式化和 linting：
+
+```bash
+# 安装开发依赖
+pip install -e ".[dev]"
+
+# 格式化代码
+ruff format .
+
+# 检查代码
+ruff check .
+
+# 自动修复问题
+ruff check --fix .
+```
+
+### 运行测试
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行特定测试
+pytest test/test_router.py
+
+# 带覆盖率
+pytest --cov=src --cov-report=html
+```
+
+本项目配置了 GitHub Actions CI，每次推送到 main 分支时会自动运行代码检查和测试。
 
 ## 安全性
 
@@ -254,11 +296,23 @@ MCP Router 提供以下工具给 LLM 使用：
 
 ## 许可证
 
-[MIT License](License)
+[MIT License](LICENSE)
 
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
+贡献指南：
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+请确保：
+- 代码通过 `ruff` 检查
+- 添加或更新相关测试
+- 更新文档（如果需要）
 
 ## 联系方式
 

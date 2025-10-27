@@ -7,7 +7,10 @@ license = {text = "MIT"}
 requires-python = ">=3.10"
 keywords = ["mcp", "router", "proxy", "llm", "ai"]
 authors = [
-    {name = "ChuranNeko"}
+    {name = "ChuranNeko", email = "churanneko@example.com"}
+]
+maintainers = [
+    {name = "ChuranNeko", email = "churanneko@example.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -17,6 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "fastapi>=0.104.0",
@@ -27,21 +32,41 @@ dependencies = [
     "watchdog>=3.0.0",
     "python-dotenv>=1.0.0",
     "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/ChuranNeko/mcp_router"
 Repository = "https://github.com/ChuranNeko/mcp_router"
 Issues = "https://github.com/ChuranNeko/mcp_router/issues"
+Documentation = "https://github.com/ChuranNeko/mcp_router#readme"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.hatch.build]
+exclude = [
+    "src/**/__pycache__",
+    "src/**/*.pyc",
+]
 
 [tool.ruff]
 line-length = 100
