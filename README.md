@@ -253,7 +253,7 @@ MCP Router 提供以下工具给 LLM 使用：
 
 ## 许可证
 
-MIT License
+[MIT License](License)
 
 ## 贡献
 
