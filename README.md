@@ -237,16 +237,12 @@ MCP Router 提供以下工具给 LLM 使用：
 
 ## 测试
 
-测试文件已移至独立的 `test` 分支。查看完整的测试套件和文档：
+本项目配置了 GitHub Actions CI，每次推送到 main 分支时会自动运行所有测试。
 
-**[前往 test 分支查看测试](https://github.com/ChuranNeko/mcp_router/tree/test)**
-
-包含以下测试：
+测试包含：
 - 单元测试：路由器、API、安全验证
 - 集成测试：完整的端到端测试
-- 测试文档：详细的测试说明和运行指南
-
-本项目配置了 GitHub Actions CI，每次推送到 python 分支时会自动运行所有测试。
+- 测试覆盖率报告
 
 ## 安全性
 
