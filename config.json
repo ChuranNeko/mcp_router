@@ -1,0 +1,33 @@
+{
+  "api": {
+    "enabled": true,
+    "port": 8000,
+    "host": "127.0.0.1",
+    "cors_origin": "*"
+  },
+  "server": {
+    "enabled": true,
+    "transport_type": "stdio"
+  },
+  "mcp_client": {
+    "enabled": true,
+    "timeout": 30
+  },
+  "security": {
+    "bearer_token": "",
+    "enable_validation": true
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file": "logs/mcp_router.log",
+    "max_bytes": 10485760,
+    "backup_count": 5
+  },
+  "watcher": {
+    "enabled": true,
+    "watch_path": "data",
+    "debounce_delay": 1.0
+  }
+}
+
