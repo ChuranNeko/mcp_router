@@ -1,7 +1,7 @@
 """Utility modules for MCP Router."""
 
-from .validator import InputValidator
 from .security import SecurityManager
+from .validator import InputValidator
 from .watcher import FileWatcher
 
 __all__ = [
@@ -9,4 +9,3 @@ __all__ = [
     "SecurityManager",
     "FileWatcher",
 ]
-
