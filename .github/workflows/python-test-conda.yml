@@ -1,0 +1,57 @@
+# This workflow will test Python package using Conda
+
+name: Python Tests with Conda
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Miniconda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+        miniforge-version: latest
+        activate-environment: mcp_router
+        environment-file: environment.yml
+        auto-activate-base: false
+    
+    - name: Display environment info
+      shell: bash -l {0}
+      run: |
+        conda info
+        conda list
+    
+    - name: Install package in development mode
+      shell: bash -l {0}
+      run: |
+        pip install -e .
+    
+    - name: Lint with ruff (optional)
+      shell: bash -l {0}
+      continue-on-error: true
+      run: |
+        pip install ruff
+        ruff check src/ || true
+    
+    - name: Run basic tests
+      shell: bash -l {0}
+      run: |
+        python -c "import sys; print(f'Python {sys.version}')"
+        python -c "from src.core.config import ConfigManager; print('Config module OK')"
+        python -c "from src.mcp.router import MCPRouter; print('Router module OK')"
+        echo "Basic import tests passed!"
+
