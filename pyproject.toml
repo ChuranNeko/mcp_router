@@ -1,6 +1,6 @@
 [project]
 name = "mcp-router"
-version = "1.0.0"
+version = "1.0.1"
 description = "A routing/proxy system for MCP servers"
 readme = "README.md"
 license = {text = "MIT"}
