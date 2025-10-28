@@ -17,22 +17,41 @@ from src.utils.watcher import FileWatcher
 logger = get_logger(__name__)
 
 
-async def on_file_change(file_path: str, event_type: str):
-    """Handle configuration file changes.
+async def poll_watcher_queue(queue, client_manager):
+    """Poll watcher queue for file changes without blocking main process.
 
     Args:
-        file_path: Path to changed file
-        event_type: Type of change (created, modified, deleted)
+        queue: Multiprocessing queue from watcher subprocess
+        client_manager: MCP client manager instance
     """
-    logger.info(f"Configuration file {event_type}: {file_path}")
+    while True:
+        try:
+            # Non-blocking check for events
+            if not queue.empty():
+                event = queue.get_nowait()
+                file_path = event["path"]
+                event_type = event["event_type"]
 
-    path = Path(file_path)
-    provider = path.parent.name
+                logger.info(f"Config file {event_type}: {file_path}")
 
-    if event_type == "deleted":
-        logger.info(f"Configuration deleted for provider: {provider}")
-    else:
-        logger.info(f"Configuration updated for provider: {provider}")
+                path = Path(file_path)
+                provider = path.parent.name
+
+                # Log only, don't reload to avoid disrupting connections
+                if event_type == "deleted":
+                    logger.info(
+                        f"Config deleted for provider '{provider}' (reload on next restart)"
+                    )
+                else:
+                    logger.info(
+                        f"Config updated for provider '{provider}' (reload on next restart)"
+                    )
+
+            # Sleep to avoid busy-waiting
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Error polling watcher queue: {e}")
+            await asyncio.sleep(1)
 
 
 async def run_mcp_server(config: ConfigManager):
@@ -51,22 +70,38 @@ async def run_mcp_server(config: ConfigManager):
 
     router = MCPRouter(client_manager)
 
+    watcher = None
+    watcher_queue = None
+
     if config.get("watcher.enabled", True):
         watcher = FileWatcher(
             watch_path=data_path,
-            callback=on_file_change,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
-        watcher.start()
+        watcher_queue = watcher.start()
+        logger.info("Config watcher isolated in subprocess - main process stable")
 
     server = MCPServer(router, name="mcp_router")
 
+    async def run_with_watcher():
+        """Run server with watcher polling."""
+        # Start both server and watcher polling
+        await asyncio.gather(
+            server.run(),
+            poll_watcher_queue(watcher_queue, client_manager)
+            if watcher_queue
+            else asyncio.sleep(float("inf")),
+        )
+
     try:
-        await server.run()
+        if watcher_queue:
+            await run_with_watcher()
+        else:
+            await server.run()
     except KeyboardInterrupt:
         logger.info("Shutting down MCP server...")
     finally:
-        if config.get("watcher.enabled", True):
+        if watcher:
             watcher.stop()
         await client_manager.shutdown()
 
@@ -94,13 +129,16 @@ async def run_api_server(config: ConfigManager):
         enable_validation=config.get("security.enable_validation", True),
     )
 
+    watcher = None
+    watcher_queue = None
+
     if config.get("watcher.enabled", True):
         watcher = FileWatcher(
             watch_path=data_path,
-            callback=on_file_change,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
-        watcher.start()
+        watcher_queue = watcher.start()
+        logger.info("Config watcher isolated in subprocess - main process stable")
 
     app = create_app(
         mcp_router=router,
@@ -116,12 +154,24 @@ async def run_api_server(config: ConfigManager):
     uvicorn_config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(uvicorn_config)
 
+    async def run_with_watcher():
+        """Run API server with watcher polling."""
+        await asyncio.gather(
+            server.serve(),
+            poll_watcher_queue(watcher_queue, client_manager)
+            if watcher_queue
+            else asyncio.sleep(float("inf")),
+        )
+
     try:
-        await server.serve()
+        if watcher_queue:
+            await run_with_watcher()
+        else:
+            await server.serve()
     except KeyboardInterrupt:
         logger.info("Shutting down API server...")
     finally:
-        if config.get("watcher.enabled", True):
+        if watcher:
             watcher.stop()
         await client_manager.shutdown()
 
@@ -147,13 +197,16 @@ async def run_combined_mode(config: ConfigManager):
         enable_validation=config.get("security.enable_validation", True),
     )
 
+    watcher = None
+    watcher_queue = None
+
     if config.get("watcher.enabled", True):
         watcher = FileWatcher(
             watch_path=data_path,
-            callback=on_file_change,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
-        watcher.start()
+        watcher_queue = watcher.start()
+        logger.info("Config watcher isolated in subprocess - main process stable")
 
     async def run_mcp():
         """Run MCP stdio server."""
@@ -177,12 +230,16 @@ async def run_combined_mode(config: ConfigManager):
         server = uvicorn.Server(uvicorn_config)
         await server.serve()
 
+    tasks = [run_mcp(), run_api()]
+    if watcher_queue:
+        tasks.append(poll_watcher_queue(watcher_queue, client_manager))
+
     try:
-        await asyncio.gather(run_mcp(), run_api())
+        await asyncio.gather(*tasks)
     except KeyboardInterrupt:
         logger.info("Shutting down MCP Router...")
     finally:
-        if config.get("watcher.enabled", True):
+        if watcher:
             watcher.stop()
         await client_manager.shutdown()
 

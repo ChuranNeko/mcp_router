@@ -38,3 +38,6 @@ build/
 # Data
 data/
 
+# ruff
+.ruff_cache/
+
