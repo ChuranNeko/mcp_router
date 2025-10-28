@@ -7,7 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from src.core.config import ConfigManager
-from src.core.logger import setup_logging, get_logger
+from src.core.logger import get_logger, setup_logging
 from src.mcp.client import MCPClientManager
 from src.mcp.router import MCPRouter
 from src.mcp.server import MCPServer

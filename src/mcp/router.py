@@ -67,7 +67,7 @@ class MCPRouter:
 
         return result
 
-    async def add(self, provider_name: str, config: dict[str, Any]) -> dict[str, str]:
+    async def add(self, provider_name: str, config: dict[str, Any]) -> str:
         """Add a new MCP configuration.
 
         Args:
@@ -75,13 +75,15 @@ class MCPRouter:
             config: MCP configuration
 
         Returns:
-            Success status and instance name
+            Simple status message
         """
-        instance_name = await self.client_manager.add_instance(provider_name, config)
-
-        logger.info(f"Added new instance: {instance_name}")
-
-        return {"status": "success", "instance_name": instance_name}
+        try:
+            instance_name = await self.client_manager.add_instance(provider_name, config)
+            logger.info(f"Added new instance: {instance_name}")
+            return "Done"
+        except Exception as e:
+            logger.error(f"Failed to add instance: {e}")
+            return f"Error: {str(e)}"
 
     async def call(self, instance_name: str, tool_name: str, **kwargs) -> Any:
         """Call a tool on a specific instance.
@@ -102,53 +104,60 @@ class MCPRouter:
 
         return result
 
-    async def remove(self, instance_name: str) -> dict[str, str]:
+    async def remove(self, instance_name: str) -> str:
         """Remove an MCP configuration.
 
         Args:
             instance_name: Name of instance to remove
 
         Returns:
-            Success status
+            Simple status message
         """
-        await self.client_manager.remove_instance(instance_name)
+        try:
+            await self.client_manager.remove_instance(instance_name)
 
-        if self._current_instance == instance_name:
-            self._current_instance = None
+            if self._current_instance == instance_name:
+                self._current_instance = None
 
-        logger.info(f"Removed instance: {instance_name}")
+            logger.info(f"Removed instance: {instance_name}")
+            return "Done"
+        except Exception as e:
+            logger.error(f"Failed to remove instance: {e}")
+            return f"Error: {str(e)}"
 
-        return {"status": "success", "removed": instance_name}
-
-    async def disable(self, instance_name: str) -> dict[str, Any]:
+    async def disable(self, instance_name: str) -> str:
         """Disable an MCP instance.
 
         Args:
             instance_name: Name of instance to disable
 
         Returns:
-            Success status
+            Simple status message
         """
-        await self.client_manager.disable_instance(instance_name)
+        try:
+            await self.client_manager.disable_instance(instance_name)
+            logger.info(f"Disabled instance: {instance_name}")
+            return "Done"
+        except Exception as e:
+            logger.error(f"Failed to disable instance: {e}")
+            return f"Error: {str(e)}"
 
-        logger.info(f"Disabled instance: {instance_name}")
-
-        return {"status": "success", "instance": instance_name, "active": False}
-
-    async def enable(self, instance_name: str) -> dict[str, Any]:
+    async def enable(self, instance_name: str) -> str:
         """Enable an MCP instance.
 
         Args:
             instance_name: Name of instance to enable
 
         Returns:
-            Success status
+            Simple status message
         """
-        await self.client_manager.enable_instance(instance_name)
-
-        logger.info(f"Enabled instance: {instance_name}")
-
-        return {"status": "success", "instance": instance_name, "active": True}
+        try:
+            await self.client_manager.enable_instance(instance_name)
+            logger.info(f"Enabled instance: {instance_name}")
+            return "Done"
+        except Exception as e:
+            logger.error(f"Failed to enable instance: {e}")
+            return f"Error: {str(e)}"
 
     def get_current_instance(self) -> str | None:
         """Get currently selected instance.
