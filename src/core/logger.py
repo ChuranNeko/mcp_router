@@ -8,6 +8,37 @@ from pathlib import Path
 _loggers = {}
 
 
+class StdioNoiseFilter(logging.Filter):
+    """过滤MCP客户端stdio通信中的已知噪音错误"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Filter out known harmless errors from MCP stdio communication.
+
+        Args:
+            record: Log record to filter
+
+        Returns:
+            False if record should be filtered out, True otherwise
+        """
+        # 过滤MCP客户端的JSON解析错误（由子进程的非JSON输出引起）
+        if record.name == "mcp.client.stdio" and record.levelno == logging.ERROR:
+            msg = record.getMessage()
+            # 已知的harmless错误模式
+            harmless_patterns = [
+                "Failed to parse JSONRPC message from server",
+                "Invalid JSON: expected value",
+                "Apifox MCP Server",
+                "请阅读帮助文档",
+            ]
+            if any(pattern in msg for pattern in harmless_patterns):
+                # 将这些消息降级为DEBUG级别
+                record.levelno = logging.DEBUG
+                record.levelname = "DEBUG"
+                return True  # 让日志记录器决定是否显示（根据当前级别）
+
+        return True
+
+
 def setup_logging(
     level: str = "INFO",
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -34,6 +65,10 @@ def setup_logging(
         root_logger.removeHandler(handler)
 
     formatter = logging.Formatter(log_format)
+
+    # 添加噪音过滤器到root logger
+    noise_filter = StdioNoiseFilter()
+    root_logger.addFilter(noise_filter)
 
     # 控制台输出
     console_handler = logging.StreamHandler()

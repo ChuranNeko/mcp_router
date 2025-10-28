@@ -1,6 +1,5 @@
 """MCP Router - Core routing logic."""
 
-import builtins
 from typing import Any
 
 from ..core.logger import get_logger
@@ -54,18 +53,13 @@ class MCPRouter:
         """
         return self.client_manager.list_instances()
 
-    def help(self) -> dict[str, builtins.list[dict[str, Any]]]:
+    def help(self) -> dict[str, Any]:
         """Get help information for all tools.
 
         Returns:
-            Dictionary mapping instance names to their tool descriptions
+            Dictionary with instance info and their tool descriptions
         """
-        result = {}
-
-        for instance_name, tools in self.client_manager.get_all_tools().items():
-            result[instance_name] = tools
-
-        return result
+        return self.client_manager.get_all_tools()
 
     async def add(self, provider_name: str, config: dict[str, Any]) -> str:
         """Add a new MCP configuration.

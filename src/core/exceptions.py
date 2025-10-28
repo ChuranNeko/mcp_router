@@ -30,10 +30,15 @@ class ValidationError(MCPRouterException):
 class InstanceNotFoundError(MCPRouterException):
     """Raised when an MCP instance is not found."""
 
-    def __init__(self, instance_name: str):
-        message = f"Instance not found: {instance_name}"
+    def __init__(self, instance_name: str, available_instances: list[str] | None = None):
+        if available_instances:
+            instances_str = ", ".join(f"'{inst}'" for inst in available_instances)
+            message = f"Instance not found: {instance_name}. Available instances: {instances_str}"
+        else:
+            message = f"Instance not found: {instance_name}"
         super().__init__(message, "INSTANCE_NOT_FOUND")
         self.instance_name = instance_name
+        self.available_instances = available_instances
 
 
 class ToolNotFoundError(MCPRouterException):

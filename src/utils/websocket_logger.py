@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from typing import Set
 
 from fastapi import WebSocket
 
@@ -13,7 +12,7 @@ class WebSocketLogHandler(logging.Handler):
     def __init__(self):
         """初始化WebSocket日志处理器."""
         super().__init__()
-        self.clients: Set[WebSocket] = set()
+        self.clients: set[WebSocket] = set()
         self._lock = asyncio.Lock()
 
     async def add_client(self, websocket: WebSocket) -> None:

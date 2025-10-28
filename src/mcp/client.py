@@ -217,6 +217,7 @@ class MCPClientInstance:
         return {
             "name": self.name,
             "provider": self.provider,
+            "display_name": f"{self.name} (provider: {self.provider})",
             "active": self.is_active,
             "connected": self._connected,
             "transport_type": self.transport_type,
@@ -238,6 +239,7 @@ class MCPClientManager:
         self.data_path = Path(data_path)
         self.timeout = timeout
         self._instances: dict[str, MCPClientInstance] = {}
+        self._provider_to_instance: dict[str, str] = {}  # provider名到instance名的映射
 
     async def load_configurations(self) -> None:
         """Load all MCP configurations from data directory."""
@@ -266,7 +268,7 @@ class MCPClientManager:
                 data = json.load(f)
 
             if "mcpServers" in data:
-                for server_name, server_config in data["mcpServers"].items():
+                for _server_name, server_config in data["mcpServers"].items():
                     await self._create_instance_from_config(server_config, config_path.parent.name)
             else:
                 await self._create_instance_from_config(data, config_path.parent.name)
@@ -302,6 +304,8 @@ class MCPClientManager:
                 await instance.connect()
 
             self._instances[instance.name] = instance
+            # 建立provider到instance的映射，支持用provider名查找
+            self._provider_to_instance[instance.provider] = instance.name
             logger.info(f"Instance '{instance.name}' loaded successfully")
         except Exception as e:
             logger.error(f"Failed to create instance from config: {e}")
@@ -337,6 +341,7 @@ class MCPClientManager:
                 json.dump(validated_config, f, indent=2, ensure_ascii=False)
 
         await self._create_instance_from_config(validated_config, provider)
+        # 映射关系在_create_instance_from_config中已经建立
 
         return instance_name
 
@@ -359,6 +364,10 @@ class MCPClientManager:
             config_path = provider_path / "mcp_settings.json"
             if config_path.exists():
                 config_path.unlink()
+
+        # 同时删除provider映射
+        if instance.provider in self._provider_to_instance:
+            del self._provider_to_instance[instance.provider]
 
         del self._instances[instance_name]
         logger.info(f"Instance '{instance_name}' removed")
@@ -395,10 +404,10 @@ class MCPClientManager:
         logger.info(f"Instance '{instance_name}' disabled")
 
     def get_instance(self, instance_name: str) -> MCPClientInstance:
-        """Get an instance by name.
+        """Get an instance by name or provider name.
 
         Args:
-            instance_name: Instance name
+            instance_name: Instance name or provider name
 
         Returns:
             MCPClientInstance
@@ -406,10 +415,19 @@ class MCPClientManager:
         Raises:
             InstanceNotFoundError: If instance not found
         """
-        if instance_name not in self._instances:
-            raise InstanceNotFoundError(instance_name)
+        # 先尝试直接匹配实例名
+        if instance_name in self._instances:
+            return self._instances[instance_name]
 
-        return self._instances[instance_name]
+        # 尝试用provider名查找
+        if instance_name in self._provider_to_instance:
+            actual_name = self._provider_to_instance[instance_name]
+            logger.info(f"Resolved provider '{instance_name}' to instance '{actual_name}'")
+            return self._instances[actual_name]
+
+        # 都找不到，提供可用实例列表
+        available = list(self._instances.keys())
+        raise InstanceNotFoundError(instance_name, available)
 
     def list_instances(self) -> list[dict[str, Any]]:
         """List all instances.
@@ -419,17 +437,21 @@ class MCPClientManager:
         """
         return [instance.to_dict() for instance in self._instances.values()]
 
-    def get_all_tools(self) -> dict[str, list[dict[str, Any]]]:
+    def get_all_tools(self) -> dict[str, Any]:
         """Get all tools from all instances.
 
         Returns:
-            Dictionary mapping instance names to their tools
+            Dictionary with instance info and their tools
         """
         result = {}
         for name, instance in self._instances.items():
             if instance.is_active and instance.is_connected():
                 tools = instance.get_tools()
-                result[name] = list(tools.values())
+                result[name] = {
+                    "provider": instance.provider,
+                    "display_name": f"{name} (provider: {instance.provider})",
+                    "tools": list(tools.values()),
+                }
 
         return result
 

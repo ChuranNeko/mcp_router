@@ -61,7 +61,10 @@ class MCPServer:
                 ),
                 Tool(
                     name="mcp.router.list",
-                    description="List all registered MCP client instances",
+                    description=(
+                        "List all registered MCP client instances with their names and providers. "
+                        "Use the 'name' field (or 'provider' field) when calling tools."
+                    ),
                     inputSchema={"type": "object", "properties": {}},
                 ),
                 Tool(
@@ -71,13 +74,17 @@ class MCPServer:
                 ),
                 Tool(
                     name="mcp.router.call",
-                    description="Call a tool on a specific instance",
+                    description=(
+                        "Call a tool on a specific instance. "
+                        "Use either the full instance name or provider name as instance_name. "
+                        "Use mcp.router.help to see available tools for each instance."
+                    ),
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "instance_name": {
                                 "type": "string",
-                                "description": "Name of the instance",
+                                "description": "Instance name or provider name (e.g., 'napcat_api_doc' or full instance name)",
                             },
                             "tool_name": {
                                 "type": "string",
