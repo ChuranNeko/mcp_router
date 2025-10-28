@@ -7,10 +7,10 @@ license = {text = "MIT"}
 requires-python = ">=3.10"
 keywords = ["mcp", "router", "proxy", "llm", "ai"]
 authors = [
-    {name = "ChuranNeko", email = "churanneko@example.com"}
+    {name = "ChuranNeko", email = "churanneko@qq.com"}
 ]
 maintainers = [
-    {name = "ChuranNeko", email = "churanneko@example.com"}
+    {name = "ChuranNeko", email = "churanneko@qq.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
