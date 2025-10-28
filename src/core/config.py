@@ -110,16 +110,25 @@ class ConfigManager:
             Default configuration dictionary
         """
         return {
-            "api": {"enabled": True, "port": 8000, "host": "127.0.0.1", "cors_origin": "*"},
-            "server": {"enabled": True, "transport_type": "stdio"},
+            "api": {
+                "enabled": False,
+                "port": 8000,
+                "host": "127.0.0.1",
+                "cors_origin": "*",
+                "auto_find_port": True,
+                "enable_realtime_logs": False,
+            },
+            "server": {
+                "enabled": True,
+                "transport_type": "stdio",
+                "allow_instance_management": False,
+            },
             "mcp_client": {"enabled": True, "timeout": 30},
             "security": {"bearer_token": "", "enable_validation": True},
             "logging": {
                 "level": "INFO",
                 "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                "file": "logs/mcp_router.log",
-                "max_bytes": 10485760,
-                "backup_count": 5,
+                "directory": "logs",
             },
             "watcher": {"enabled": True, "watch_path": "data", "debounce_delay": 1.0},
         }

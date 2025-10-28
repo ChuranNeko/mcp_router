@@ -1,13 +1,16 @@
 {
   "api": {
-    "enabled": true,
+    "enabled": false,
     "port": 8000,
     "host": "127.0.0.1",
-    "cors_origin": "*"
+    "cors_origin": "*",
+    "auto_find_port": true,
+    "enable_realtime_logs": false
   },
   "server": {
     "enabled": true,
-    "transport_type": "stdio"
+    "transport_type": "stdio",
+    "allow_instance_management": false
   },
   "mcp_client": {
     "enabled": true,
@@ -20,9 +23,7 @@
   "logging": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "file": "logs/mcp_router.log",
-    "max_bytes": 10485760,
-    "backup_count": 5
+    "directory": "logs"
   },
   "watcher": {
     "enabled": true,

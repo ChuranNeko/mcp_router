@@ -107,13 +107,24 @@ class MCPClientInstance:
             return
 
         try:
+            # 先标记为未连接，避免重复断开
+            self._connected = False
+
+            # 使用 shield 保护断开操作，避免 cancel scope 错误
+            import asyncio
+
             if self._session:
-                await self._session.__aexit__(None, None, None)
+                try:
+                    await asyncio.shield(self._session.__aexit__(None, None, None))
+                except Exception as e:
+                    logger.debug(f"Session exit error (expected): {e}")
 
             if self._transport:
-                await self._transport.__aexit__(None, None, None)
+                try:
+                    await asyncio.shield(self._transport.__aexit__(None, None, None))
+                except Exception as e:
+                    logger.debug(f"Transport exit error (expected): {e}")
 
-            self._connected = False
             self._tools = {}
             self._transport = None
             logger.info(f"Instance '{self.name}' disconnected")

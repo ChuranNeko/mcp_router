@@ -9,13 +9,15 @@ MCP Router 是一个模型上下文协议（MCP）路由/代理系统，作为MC
 
 ## 特性
 
-- **动态路由**: 类似Next.js的文件路由系统，使用 `mcp_settings.json` 作为配置文件
-- **热加载**: 自动检测配置文件变化并重新加载
-- **多传输支持**: 支持 Stdio、SSE、HTTP 三种传输方式
-- **安全认证**: 可选的 Bearer Token 认证
-- **REST API**: 可选的 HTTP API 用于配置管理
-- **完整日志**: 支持文件和控制台日志，带日志轮转
-- **输入验证**: 防止路径遍历、注入攻击等安全问题
+- **动态路由**: 文件系统路由，使用 `mcp_settings.json` 配置
+- **快速启动**: 后台加载客户端，启动时间<0.1秒
+- **热加载**: 自动检测配置变化并重新加载
+- **多传输支持**: Stdio、SSE、HTTP 传输协议
+- **实时日志**: WebSocket实时日志流（可选）
+- **权限控制**: 可配置的LLM实例管理权限
+- **智能端口**: 端口占用时自动查找可用端口
+- **安全认证**: Bearer Token认证，输入验证
+- **REST API**: 完整的HTTP API用于配置管理
 
 ## 项目结构
 
@@ -102,14 +104,17 @@ conda activate mcp_router
 ```json
 {
   "api": {
-    "enabled": true,
+    "enabled": false,
     "port": 8000,
     "host": "127.0.0.1",
-    "cors_origin": "*"
+    "cors_origin": "*",
+    "auto_find_port": true,
+    "enable_realtime_logs": false
   },
   "server": {
     "enabled": true,
-    "transport_type": "stdio"
+    "transport_type": "stdio",
+    "allow_instance_management": false
   },
   "mcp_client": {
     "enabled": true,
@@ -121,7 +126,8 @@ conda activate mcp_router
   },
   "logging": {
     "level": "INFO",
-    "file": "logs/mcp_router.log"
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "directory": "logs"
   },
   "watcher": {
     "enabled": true,
@@ -130,6 +136,12 @@ conda activate mcp_router
   }
 }
 ```
+
+**主要配置项说明**:
+- `auto_find_port`: 端口占用时自动递增查找可用端口
+- `enable_realtime_logs`: 启用WebSocket实时日志 (ws://host:port/ws)
+- `allow_instance_management`: 允许LLM管理实例 (add/remove/enable/disable)
+- `logging.directory`: 日志目录，使用Minecraft风格 (latest.txt + 时间戳备份)
 
 ### 添加MCP配置
 
@@ -203,30 +215,41 @@ python main.py
 
 MCP Router 提供以下工具给 LLM 使用：
 
-- `mcp.router.use(instance_name)` - 使用指定的MCP实例
+**基础工具** (总是可用):
 - `mcp.router.list()` - 列出所有已注册的MCP客户端实例
 - `mcp.router.help()` - 返回所有实例的工具列表和使用说明
-- `mcp.router.add(provider_name, config)` - 动态添加新的MCP配置
+- `mcp.router.use(instance_name)` - 使用指定的MCP实例
 - `mcp.router.call(instance_name, tool_name, **kwargs)` - 调用指定实例的指定工具
+
+**管理工具** (需启用 `allow_instance_management`):
+- `mcp.router.add(provider_name, config)` - 动态添加新的MCP配置
 - `mcp.router.remove(instance_name)` - 移除MCP配置
-- `mcp.router.disable(instance_name)` - 禁用MCP实例
 - `mcp.router.enable(instance_name)` - 启用MCP实例
+- `mcp.router.disable(instance_name)` - 禁用MCP实例
 
 ## REST API
 
 当 API 模式启用时，可通过以下端点管理 MCP Router：
 
+**实例管理**:
 - `GET /api/instances` - 列出所有实例
 - `GET /api/instances/{name}` - 获取实例详情
-- `GET /api/tools` - 列出所有工具
-- `GET /api/tools/{instance_name}` - 获取实例的工具列表
 - `POST /api/instances` - 添加新实例
 - `PATCH /api/instances/{name}` - 更新实例配置
 - `DELETE /api/instances/{name}` - 删除实例
 - `POST /api/instances/{name}/enable` - 启用实例
 - `POST /api/instances/{name}/disable` - 禁用实例
+
+**工具管理**:
+- `GET /api/tools` - 列出所有工具
+- `GET /api/tools/{instance_name}` - 获取实例的工具列表
 - `POST /api/call` - 调用工具
-- `GET /api/config` - 获取配置 (调试用)
+
+**其他**:
+- `GET /` - 服务状态
+- `GET /health` - 健康检查
+- `GET /api/config` - 获取配置
+- `WS /ws` - 实时日志流 (需启用 `enable_realtime_logs`)
 
 ## 与 LLM 集成
 

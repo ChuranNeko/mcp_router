@@ -1,11 +1,13 @@
 """MCP Router - Main entry point."""
 
 import asyncio
+import socket
 import sys
 from pathlib import Path
 
 import uvicorn
 
+from src import __version__
 from src.core.config import ConfigManager
 from src.core.logger import get_logger, setup_logging
 from src.mcp.client import MCPClientManager
@@ -15,6 +17,30 @@ from src.utils.security import SecurityManager
 from src.utils.watcher import FileWatcher
 
 logger = get_logger(__name__)
+
+
+def find_available_port(host: str, start_port: int, max_attempts: int = 100) -> int:
+    """查找可用端口，从start_port开始递增。
+
+    Args:
+        host: 主机地址
+        start_port: 起始端口
+        max_attempts: 最大尝试次数
+
+    Returns:
+        可用的端口号
+
+    Raises:
+        RuntimeError: 如果找不到可用端口
+    """
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((host, port))
+                return port
+        except OSError:
+            continue
+    raise RuntimeError(f"无法找到可用端口 (尝试范围: {start_port}-{start_port + max_attempts - 1})")
 
 
 async def poll_watcher_queue(queue, client_manager):
@@ -65,13 +91,9 @@ async def run_mcp_server(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
-    # 初始化管理器（不阻塞）
+    # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
     router = MCPRouter(client_manager)
-
-    # 立即初始化 MCP 服务器
-    server = MCPServer(router, name="mcp_router")
-    logger.info("MCP Server ready, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -83,16 +105,21 @@ async def run_mcp_server(config: ConfigManager):
         )
         watcher_queue = watcher.start()
 
-    async def load_clients():
-        """后台异步加载 MCP 客户端"""
+    # 初始化并启动 MCP 服务器（立即启动，不等待客户端加载）
+    allow_management = config.get("server.allow_instance_management", False)
+    server = MCPServer(router, name="mcp_router", allow_instance_management=allow_management)
+    logger.info(f"MCP Server ready - starting service... (management: {allow_management})")
+
+    async def load_clients_in_background():
+        """在后台加载客户端配置"""
         try:
             await client_manager.load_configurations()
-            logger.info("All MCP clients loaded")
+            logger.info("All MCP client instances loaded in background")
         except Exception as e:
-            logger.error(f"Error loading clients: {e}")
+            logger.error(f"Error loading MCP clients: {e}", exc_info=True)
 
-    # 并发运行：服务器 + 客户端加载 + 配置监视
-    tasks = [server.run(), load_clients()]
+    # 并发运行：服务器 + 后台加载客户端 + 配置监视
+    tasks = [server.run(), load_clients_in_background()]
     if watcher_queue:
         tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
@@ -119,7 +146,7 @@ async def run_api_server(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
-    # 初始化管理器（不阻塞）
+    # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
     router = MCPRouter(client_manager)
 
@@ -127,18 +154,6 @@ async def run_api_server(config: ConfigManager):
         bearer_token=config.get("security.bearer_token"),
         enable_validation=config.get("security.enable_validation", True),
     )
-
-    # 立即创建 API 应用
-    app = create_app(
-        mcp_router=router,
-        security_manager=security_manager,
-        cors_origin=config.get("api.cors_origin", "*"),
-    )
-
-    host = config.get("api.host", "127.0.0.1")
-    port = config.get("api.port", 8000)
-
-    logger.info(f"API server ready at {host}:{port}, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -150,19 +165,53 @@ async def run_api_server(config: ConfigManager):
         )
         watcher_queue = watcher.start()
 
+    # 创建 API 应用（立即启动，不等待客户端加载）
+    enable_realtime_logs = config.get("api.enable_realtime_logs", False)
+
+    # 如果启用WebSocket实时日志，添加日志处理器
+    if enable_realtime_logs:
+        from src.utils.websocket_logger import enable_websocket_logging
+
+        enable_websocket_logging(
+            level=config.get("logging.level", "INFO"),
+            log_format=config.get("logging.format"),
+        )
+        logger.info("WebSocket realtime logging enabled")
+
+    app = create_app(
+        mcp_router=router,
+        security_manager=security_manager,
+        cors_origin=config.get("api.cors_origin", "*"),
+        enable_realtime_logs=enable_realtime_logs,
+    )
+
+    host = config.get("api.host", "127.0.0.1")
+    start_port = config.get("api.port", 8000)
+    auto_find_port = config.get("api.auto_find_port", True)
+
+    # 查找可用端口
+    if auto_find_port:
+        port = find_available_port(host, start_port)
+        if port != start_port:
+            logger.warning(f"端口 {start_port} 不可用，使用端口 {port}")
+    else:
+        port = start_port
+
+    logger.info(f"API server ready at {host}:{port} - starting service...")
+
     uvicorn_config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(uvicorn_config)
 
-    async def load_clients():
-        """后台异步加载 MCP 客户端"""
+    async def load_clients_in_background():
+        """在后台加载客户端配置"""
         try:
             await client_manager.load_configurations()
-            logger.info("All MCP clients loaded")
+            logger.info("All MCP client instances loaded in background")
         except Exception as e:
-            logger.error(f"Error loading clients: {e}")
+            logger.error(f"Error loading MCP clients: {e}", exc_info=True)
 
-    # 并发运行：API 服务器 + 客户端加载 + 配置监视
-    tasks = [server.serve(), load_clients()]
+    # 并发运行：API 服务器 + 后台加载客户端 + 配置监视
+    tasks = [server.serve(), load_clients_in_background()]
     if watcher_queue:
         tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
@@ -187,7 +236,7 @@ async def run_combined_mode(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
-    # 初始化管理器（不阻塞）
+    # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
     router = MCPRouter(client_manager)
 
@@ -195,8 +244,6 @@ async def run_combined_mode(config: ConfigManager):
         bearer_token=config.get("security.bearer_token"),
         enable_validation=config.get("security.enable_validation", True),
     )
-
-    logger.info("MCP Server + API ready, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -210,35 +257,63 @@ async def run_combined_mode(config: ConfigManager):
 
     async def run_mcp():
         """Run MCP stdio server."""
-        server = MCPServer(router, name="mcp_router")
+        allow_management = config.get("server.allow_instance_management", False)
+        server = MCPServer(router, name="mcp_router", allow_instance_management=allow_management)
         await server.run()
 
     async def run_api():
         """Run API server."""
         from src.api.app import create_app
 
+        enable_realtime_logs = config.get("api.enable_realtime_logs", False)
+
+        # 如果启用WebSocket实时日志，添加日志处理器
+        if enable_realtime_logs:
+            from src.utils.websocket_logger import enable_websocket_logging
+
+            enable_websocket_logging(
+                level=config.get("logging.level", "INFO"),
+                log_format=config.get("logging.format"),
+            )
+            logger.info("WebSocket realtime logging enabled")
+
         app = create_app(
             mcp_router=router,
             security_manager=security_manager,
             cors_origin=config.get("api.cors_origin", "*"),
+            enable_realtime_logs=enable_realtime_logs,
         )
 
         host = config.get("api.host", "127.0.0.1")
-        port = config.get("api.port", 8000)
+        start_port = config.get("api.port", 8000)
+        auto_find_port = config.get("api.auto_find_port", True)
+
+        # 查找可用端口
+        if auto_find_port:
+            port = find_available_port(host, start_port)
+            if port != start_port:
+                logger.warning(f"端口 {start_port} 不可用，使用端口 {port}")
+        else:
+            port = start_port
+
+        logger.info(f"API server listening on {host}:{port}")
 
         uvicorn_config = uvicorn.Config(app, host=host, port=port, log_level="info")
         server = uvicorn.Server(uvicorn_config)
         await server.serve()
 
-    async def load_clients():
-        """后台异步加载 MCP 客户端"""
+    # MCP Server + API立即启动，不等待客户端加载
+    logger.info("MCP Server + API ready - starting services...")
+
+    async def load_clients_in_background():
+        """在后台加载客户端配置"""
         try:
             await client_manager.load_configurations()
-            logger.info("All MCP clients loaded")
+            logger.info("All MCP client instances loaded in background")
         except Exception as e:
-            logger.error(f"Error loading clients: {e}")
+            logger.error(f"Error loading MCP clients: {e}", exc_info=True)
 
-    tasks = [run_mcp(), run_api(), load_clients()]
+    tasks = [run_mcp(), run_api(), load_clients_in_background()]
     if watcher_queue:
         tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
@@ -257,16 +332,15 @@ def main():
     try:
         config = ConfigManager("config.json")
 
+        # Minecraft风格日志配置
         setup_logging(
             level=config.get("logging.level", "INFO"),
             log_format=config.get("logging.format"),
-            log_file=config.get("logging.file"),
-            max_bytes=config.get("logging.max_bytes", 10485760),
-            backup_count=config.get("logging.backup_count", 5),
+            log_directory=config.get("logging.directory", "logs"),
         )
 
         logger.info("=" * 60)
-        logger.info("MCP Router v1.0.0")
+        logger.info(f"MCP Router v{__version__}")
         logger.info("=" * 60)
 
         api_enabled = config.get("api.enabled", False)

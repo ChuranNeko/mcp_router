@@ -1,5 +1,4 @@
 # MCP Router 使用指南
-
 ## 目录
 
 1. [快速开始](#快速开始)
@@ -70,10 +69,12 @@ uv run python main.py
 ```json
 {
   "api": {
-    "enabled": true,        // 是否启用REST API
-    "port": 8000,           // API端口
-    "host": "127.0.0.1",    // API监听地址
-    "cors_origin": "*"      // CORS配置: "*", "0.0.0.0", "127.0.0.1", 或具体域名
+    "enabled": false,               // 是否启用REST API
+    "port": 8000,                   // API端口
+    "host": "127.0.0.1",            // API监听地址
+    "cors_origin": "*",             // CORS配置
+    "auto_find_port": true,         // 端口占用时自动+1查找可用端口
+    "enable_realtime_logs": false   // 启用WebSocket实时日志
   }
 }
 ```
@@ -82,8 +83,9 @@ uv run python main.py
 ```json
 {
   "server": {
-    "enabled": true,         // 是否启用MCP服务端
-    "transport_type": "stdio" // 传输类型: stdio, sse, http
+    "enabled": true,                    // 是否启用MCP服务端
+    "transport_type": "stdio",          // 传输类型: stdio, sse, http
+    "allow_instance_management": false  // 允许LLM管理实例 (add/remove/enable/disable)
   }
 }
 ```
@@ -112,14 +114,16 @@ uv run python main.py
 ```json
 {
   "logging": {
-    "level": "INFO",              // 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL, OFF
-    "format": "...",              // 日志格式
-    "file": "logs/mcp_router.log",// 日志文件路径
-    "max_bytes": 10485760,        // 单个日志文件最大字节数
-    "backup_count": 5             // 保留的日志文件数量
+    "level": "INFO",    // 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL, OFF
+    "format": "...",    // 日志格式
+    "directory": "logs" // 日志目录 (Minecraft风格: latest.txt + YY.MM.DD-HH-MM.txt)
   }
 }
 ```
+
+**日志文件**:
+- `logs/latest.txt` - 当前运行的日志
+- `logs/25.10.28-23-45.txt` - 历史日志（启动时间戳）
 
 #### 文件监视器配置
 ```json
@@ -382,6 +386,19 @@ Content-Type: application/json
 }
 ```
 
+#### WebSocket实时日志
+
+启用 `enable_realtime_logs` 后：
+
+```bash
+# 使用wscat
+wscat -c ws://127.0.0.1:8000/ws
+
+# 使用浏览器
+const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+ws.onmessage = (e) => console.log(e.data);
+```
+
 ---
 
 ## 示例场景
@@ -507,8 +524,13 @@ curl -X POST http://127.0.0.1:8000/api/instances \
 
 ## 更多帮助
 
-- 查看日志文件: `logs/mcp_router.log`
-- 检查配置验证: 启动时会自动验证配置
-- API文档: http://127.0.0.1:8000/docs (启用API模式后)
-- 提交Issue: 项目仓库Issue页面
+**日志查看**:
+- 当前日志: `logs/latest.txt`
+- 历史日志: `logs/25.10.28-23-45.txt`
+- 实时日志: `ws://127.0.0.1:8000/ws` (需启用API和realtime_logs)
+
+**文档和支持**:
+- API文档: http://127.0.0.1:8000/docs
+- 健康检查: http://127.0.0.1:8000/health
+- 提交Issue: GitHub仓库
 

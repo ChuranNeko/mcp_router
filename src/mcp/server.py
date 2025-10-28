@@ -17,15 +17,22 @@ logger = get_logger(__name__)
 class MCPServer:
     """MCP Server that exposes router tools to LLMs."""
 
-    def __init__(self, router: MCPRouter, name: str = "mcp_router"):
+    def __init__(
+        self,
+        router: MCPRouter,
+        name: str = "mcp_router",
+        allow_instance_management: bool = False,
+    ):
         """Initialize MCP server.
 
         Args:
             router: MCP router instance
             name: Server name
+            allow_instance_management: Whether to allow LLM to manage instances (add/remove/enable/disable)
         """
         self.router = router
         self.name = name
+        self.allow_instance_management = allow_instance_management
         self.server = Server(name)
 
         self._register_handlers()
@@ -36,6 +43,7 @@ class MCPServer:
         @self.server.list_tools()
         async def list_tools() -> list[Tool]:
             """List all available router tools."""
+            # 基础只读工具（总是可用）
             tools = [
                 Tool(
                     name="mcp.router.use",
@@ -62,33 +70,6 @@ class MCPServer:
                     inputSchema={"type": "object", "properties": {}},
                 ),
                 Tool(
-                    name="mcp.router.add",
-                    description="Add a new MCP configuration dynamically",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "provider_name": {
-                                "type": "string",
-                                "description": "Provider name (alphanumeric and underscores only)",
-                            },
-                            "config": {
-                                "type": "object",
-                                "description": "MCP configuration object",
-                                "properties": {
-                                    "name": {"type": "string"},
-                                    "type": {"type": "string", "enum": ["stdio", "sse", "http"]},
-                                    "command": {"type": "string"},
-                                    "args": {"type": "array", "items": {"type": "string"}},
-                                    "env": {"type": "object"},
-                                    "isActive": {"type": "boolean"},
-                                },
-                                "required": ["name", "type", "command"],
-                            },
-                        },
-                        "required": ["provider_name", "config"],
-                    },
-                ),
-                Tool(
                     name="mcp.router.call",
                     description="Call a tool on a specific instance",
                     inputSchema={
@@ -107,49 +88,85 @@ class MCPServer:
                         "required": ["instance_name", "tool_name"],
                     },
                 ),
-                Tool(
-                    name="mcp.router.remove",
-                    description="Remove an MCP configuration",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "instance_name": {
-                                "type": "string",
-                                "description": "Name of instance to remove",
-                            }
-                        },
-                        "required": ["instance_name"],
-                    },
-                ),
-                Tool(
-                    name="mcp.router.disable",
-                    description="Disable an MCP instance without removing its configuration",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "instance_name": {
-                                "type": "string",
-                                "description": "Name of instance to disable",
-                            }
-                        },
-                        "required": ["instance_name"],
-                    },
-                ),
-                Tool(
-                    name="mcp.router.enable",
-                    description="Enable a previously disabled MCP instance",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "instance_name": {
-                                "type": "string",
-                                "description": "Name of instance to enable",
-                            }
-                        },
-                        "required": ["instance_name"],
-                    },
-                ),
             ]
+
+            # 管理工具（仅当允许时才添加）
+            if self.allow_instance_management:
+                management_tools = [
+                    Tool(
+                        name="mcp.router.add",
+                        description="Add a new MCP configuration dynamically",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "provider_name": {
+                                    "type": "string",
+                                    "description": "Provider name (alphanumeric and underscores only)",
+                                },
+                                "config": {
+                                    "type": "object",
+                                    "description": "MCP configuration object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "type": {
+                                            "type": "string",
+                                            "enum": ["stdio", "sse", "http"],
+                                        },
+                                        "command": {"type": "string"},
+                                        "args": {"type": "array", "items": {"type": "string"}},
+                                        "env": {"type": "object"},
+                                        "isActive": {"type": "boolean"},
+                                    },
+                                    "required": ["name", "type", "command"],
+                                },
+                            },
+                            "required": ["provider_name", "config"],
+                        },
+                    ),
+                    Tool(
+                        name="mcp.router.remove",
+                        description="Remove an MCP configuration",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "instance_name": {
+                                    "type": "string",
+                                    "description": "Name of instance to remove",
+                                }
+                            },
+                            "required": ["instance_name"],
+                        },
+                    ),
+                    Tool(
+                        name="mcp.router.disable",
+                        description="Disable an MCP instance without removing its configuration",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "instance_name": {
+                                    "type": "string",
+                                    "description": "Name of instance to disable",
+                                }
+                            },
+                            "required": ["instance_name"],
+                        },
+                    ),
+                    Tool(
+                        name="mcp.router.enable",
+                        description="Enable a previously disabled MCP instance",
+                        inputSchema={
+                            "type": "object",
+                            "properties": {
+                                "instance_name": {
+                                    "type": "string",
+                                    "description": "Name of instance to enable",
+                                }
+                            },
+                            "required": ["instance_name"],
+                        },
+                    ),
+                ]
+                tools.extend(management_tools)
 
             return tools
 
@@ -158,6 +175,19 @@ class MCPServer:
             """Handle tool calls."""
             try:
                 logger.info(f"Received tool call: {name}")
+
+                # 检查管理工具权限
+                management_tools = {
+                    "mcp.router.add",
+                    "mcp.router.remove",
+                    "mcp.router.enable",
+                    "mcp.router.disable",
+                }
+                if name in management_tools and not self.allow_instance_management:
+                    raise PermissionError(
+                        f"Instance management is disabled. Tool '{name}' is not available. "
+                        "Enable 'server.allow_instance_management' in config.json to use this tool."
+                    )
 
                 result = None
 
