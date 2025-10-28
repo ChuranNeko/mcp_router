@@ -65,10 +65,13 @@ async def run_mcp_server(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
+    # 初始化管理器（不阻塞）
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
-    await client_manager.load_configurations()
-
     router = MCPRouter(client_manager)
+
+    # 立即初始化 MCP 服务器
+    server = MCPServer(router, name="mcp_router")
+    logger.info("MCP Server ready, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -79,25 +82,22 @@ async def run_mcp_server(config: ConfigManager):
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
         watcher_queue = watcher.start()
-        logger.info("Config watcher isolated in subprocess - main process stable")
 
-    server = MCPServer(router, name="mcp_router")
+    async def load_clients():
+        """后台异步加载 MCP 客户端"""
+        try:
+            await client_manager.load_configurations()
+            logger.info("All MCP clients loaded")
+        except Exception as e:
+            logger.error(f"Error loading clients: {e}")
 
-    async def run_with_watcher():
-        """Run server with watcher polling."""
-        # Start both server and watcher polling
-        await asyncio.gather(
-            server.run(),
-            poll_watcher_queue(watcher_queue, client_manager)
-            if watcher_queue
-            else asyncio.sleep(float("inf")),
-        )
+    # 并发运行：服务器 + 客户端加载 + 配置监视
+    tasks = [server.run(), load_clients()]
+    if watcher_queue:
+        tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
     try:
-        if watcher_queue:
-            await run_with_watcher()
-        else:
-            await server.run()
+        await asyncio.gather(*tasks)
     except KeyboardInterrupt:
         logger.info("Shutting down MCP server...")
     finally:
@@ -119,15 +119,26 @@ async def run_api_server(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
+    # 初始化管理器（不阻塞）
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
-    await client_manager.load_configurations()
-
     router = MCPRouter(client_manager)
 
     security_manager = SecurityManager(
         bearer_token=config.get("security.bearer_token"),
         enable_validation=config.get("security.enable_validation", True),
     )
+
+    # 立即创建 API 应用
+    app = create_app(
+        mcp_router=router,
+        security_manager=security_manager,
+        cors_origin=config.get("api.cors_origin", "*"),
+    )
+
+    host = config.get("api.host", "127.0.0.1")
+    port = config.get("api.port", 8000)
+
+    logger.info(f"API server ready at {host}:{port}, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -138,36 +149,25 @@ async def run_api_server(config: ConfigManager):
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
         watcher_queue = watcher.start()
-        logger.info("Config watcher isolated in subprocess - main process stable")
-
-    app = create_app(
-        mcp_router=router,
-        security_manager=security_manager,
-        cors_origin=config.get("api.cors_origin", "*"),
-    )
-
-    host = config.get("api.host", "127.0.0.1")
-    port = config.get("api.port", 8000)
-
-    logger.info(f"API server will listen on {host}:{port}")
 
     uvicorn_config = uvicorn.Config(app, host=host, port=port, log_level="info")
     server = uvicorn.Server(uvicorn_config)
 
-    async def run_with_watcher():
-        """Run API server with watcher polling."""
-        await asyncio.gather(
-            server.serve(),
-            poll_watcher_queue(watcher_queue, client_manager)
-            if watcher_queue
-            else asyncio.sleep(float("inf")),
-        )
+    async def load_clients():
+        """后台异步加载 MCP 客户端"""
+        try:
+            await client_manager.load_configurations()
+            logger.info("All MCP clients loaded")
+        except Exception as e:
+            logger.error(f"Error loading clients: {e}")
+
+    # 并发运行：API 服务器 + 客户端加载 + 配置监视
+    tasks = [server.serve(), load_clients()]
+    if watcher_queue:
+        tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
     try:
-        if watcher_queue:
-            await run_with_watcher()
-        else:
-            await server.serve()
+        await asyncio.gather(*tasks)
     except KeyboardInterrupt:
         logger.info("Shutting down API server...")
     finally:
@@ -187,15 +187,16 @@ async def run_combined_mode(config: ConfigManager):
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
+    # 初始化管理器（不阻塞）
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
-    await client_manager.load_configurations()
-
     router = MCPRouter(client_manager)
 
     security_manager = SecurityManager(
         bearer_token=config.get("security.bearer_token"),
         enable_validation=config.get("security.enable_validation", True),
     )
+
+    logger.info("MCP Server + API ready, loading clients in background...")
 
     watcher = None
     watcher_queue = None
@@ -206,7 +207,6 @@ async def run_combined_mode(config: ConfigManager):
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
         watcher_queue = watcher.start()
-        logger.info("Config watcher isolated in subprocess - main process stable")
 
     async def run_mcp():
         """Run MCP stdio server."""
@@ -230,7 +230,15 @@ async def run_combined_mode(config: ConfigManager):
         server = uvicorn.Server(uvicorn_config)
         await server.serve()
 
-    tasks = [run_mcp(), run_api()]
+    async def load_clients():
+        """后台异步加载 MCP 客户端"""
+        try:
+            await client_manager.load_configurations()
+            logger.info("All MCP clients loaded")
+        except Exception as e:
+            logger.error(f"Error loading clients: {e}")
+
+    tasks = [run_mcp(), run_api(), load_clients()]
     if watcher_queue:
         tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
