@@ -41,3 +41,6 @@ data/
 # ruff
 .ruff_cache/
 
+# Releases
+Releases.md
+
