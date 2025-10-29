@@ -80,21 +80,22 @@ def setup_logging(
     log_dir = Path(log_directory)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    latest_log = log_dir / "latest.txt"
+    # 使用带模式的latest日志文件名
+    latest_log = log_dir / f"latest-{transport_mode}.txt"
 
-    # 如果latest.txt存在，备份为时间戳文件（不带传输模式，因为是旧日志）
+    # 如果latest-{mode}.txt存在，备份为时间戳文件（带传输模式）
     if latest_log.exists():
         # 获取文件的修改时间
         mtime = latest_log.stat().st_mtime
         timestamp = datetime.fromtimestamp(mtime)
-        # 格式：YY.MM.DD-HH-MM.txt
-        backup_name = timestamp.strftime("%y.%m.%d-%H-%M.txt")
+        # 格式：YY.MM.DD-HH-MM-{mode}.txt
+        backup_name = timestamp.strftime(f"%y.%m.%d-%H-%M-{transport_mode}.txt")
         backup_path = log_dir / backup_name
 
         # 如果同名备份已存在，添加序号
         counter = 1
         while backup_path.exists():
-            backup_name = timestamp.strftime(f"%y.%m.%d-%H-%M-{counter}.txt")
+            backup_name = timestamp.strftime(f"%y.%m.%d-%H-%M-{transport_mode}-{counter}.txt")
             backup_path = log_dir / backup_name
             counter += 1
 

@@ -3,9 +3,10 @@
 from collections.abc import Sequence
 from typing import Any
 
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
+
+from mcp.server import Server
 
 from ..core.logger import get_logger
 from .router import MCPRouter
@@ -14,7 +15,6 @@ logger = get_logger(__name__)
 
 # 可选的SSE/HTTP传输支持
 try:
-    from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
 
@@ -284,14 +284,12 @@ class MCPServer:
             import uvicorn
             from starlette.requests import Request
             from starlette.responses import JSONResponse
-            import json
 
             routes = []
 
             # SSE传输端点
             if self.transport_type in ["sse", "http+sse"]:
                 from mcp.server.sse import SseServerTransport
-                from starlette.responses import Response
 
                 logger.info(f"Enabling SSE transport on {host}:{port}/sse")
                 sse_transport = SseServerTransport("/messages")
@@ -321,26 +319,87 @@ class MCPServer:
             if self.transport_type in ["http", "http+sse"]:
                 logger.info(f"Enabling HTTP transport on {host}:{port}/mcp")
 
+                # 用于存储会话状态
+                _session_initialized = False
+
                 async def handle_http(request: Request):
                     """Handle HTTP JSON-RPC requests."""
+                    nonlocal _session_initialized
                     try:
                         data = await request.json()
                         method = data.get("method")
                         params = data.get("params", {})
+                        request_id = data.get("id")
 
+                        logger.debug(f"HTTP request: method={method}, id={request_id}")
+
+                        # 处理 initialize 方法
+                        if method == "initialize":
+                            _session_initialized = True
+                            result = {
+                                "protocolVersion": "2024-11-05",
+                                "capabilities": {
+                                    "tools": {"listChanged": False},
+                                    "resources": {"subscribe": False, "listChanged": False},
+                                    "prompts": {"listChanged": False},
+                                },
+                                "serverInfo": {"name": self.name, "version": "1.0.0"},
+                            }
+                            logger.info("MCP session initialized via HTTP")
+                            return JSONResponse(
+                                {"jsonrpc": "2.0", "id": request_id, "result": result}
+                            )
+
+                        # 处理 notifications/initialized (不需要响应)
+                        if method == "notifications/initialized":
+                            logger.debug("Received initialized notification")
+                            return JSONResponse({"jsonrpc": "2.0"})
+
+                        # 其他方法需要先初始化
+                        if not _session_initialized and method not in ["ping"]:
+                            return JSONResponse(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": request_id,
+                                    "error": {
+                                        "code": -32002,
+                                        "message": "Session not initialized. Call 'initialize' first.",
+                                    },
+                                },
+                                status_code=400,
+                            )
+
+                        # 处理 ping
+                        if method == "ping":
+                            return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": {}})
+
+                        # 处理 tools/list
                         if method == "tools/list":
                             tools = await self.server._tool_manager.list_tools()
                             result = {"tools": [tool.model_dump() for tool in tools]}
+
+                        # 处理 tools/call
                         elif method == "tools/call":
                             tool_name = params.get("name")
                             arguments = params.get("arguments", {})
-                            result = await self.server._tool_manager.call_tool(tool_name, arguments)
-                            result = {"content": [c.model_dump() for c in result]}
+                            call_result = await self.server._tool_manager.call_tool(
+                                tool_name, arguments
+                            )
+                            result = {"content": [c.model_dump() for c in call_result]}
+
+                        # 处理 resources/list
+                        elif method == "resources/list":
+                            result = {"resources": []}
+
+                        # 处理 prompts/list
+                        elif method == "prompts/list":
+                            result = {"prompts": []}
+
                         else:
                             return JSONResponse(
                                 {
                                     "jsonrpc": "2.0",
-                                    "id": data.get("id"),
+                                    "id": request_id,
                                     "error": {
                                         "code": -32601,
                                         "message": f"Method not found: {method}",
@@ -349,9 +408,8 @@ class MCPServer:
                                 status_code=400,
                             )
 
-                        return JSONResponse(
-                            {"jsonrpc": "2.0", "id": data.get("id"), "result": result}
-                        )
+                        return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
+
                     except Exception as e:
                         logger.error(f"Error handling HTTP request: {e}", exc_info=True)
                         return JSONResponse(

@@ -9,8 +9,18 @@
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8000,
-    "allow_instance_management": false
+    "allow_instance_management": false,
+    "stdio": {
+      "enabled": true
+    },
+    "http": {
+      "enabled": true,
+      "port": 3000
+    },
+    "sse": {
+      "enabled": true,
+      "port": 3001
+    }
   },
   "mcp_client": {
     "enabled": true,

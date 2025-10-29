@@ -95,11 +95,11 @@ class MCPClientInstance:
             logger.info(
                 f"Instance '{self.name}' connected successfully with {len(self._tools)} tools"
             )
-        except asyncio.TimeoutError:
-            raise MCPTimeoutError(self.timeout)
+        except asyncio.TimeoutError as e:
+            raise MCPTimeoutError(self.timeout) from e
         except Exception as e:
             logger.error(f"Failed to connect to instance '{self.name}': {e}")
-            raise ConfigurationError(f"Failed to connect: {e}")
+            raise ConfigurationError(f"Failed to connect: {e}") from e
 
     async def disconnect(self) -> None:
         """Disconnect from MCP server."""
@@ -148,8 +148,8 @@ class MCPClientInstance:
                 }
 
             logger.debug(f"Fetched {len(self._tools)} tools from '{self.name}'")
-        except asyncio.TimeoutError:
-            raise MCPTimeoutError(self.timeout)
+        except asyncio.TimeoutError as e:
+            raise MCPTimeoutError(self.timeout) from e
         except Exception as e:
             logger.error(f"Failed to fetch tools from '{self.name}': {e}")
             raise
@@ -186,8 +186,8 @@ class MCPClientInstance:
 
             logger.debug(f"Tool '{tool_name}' completed successfully")
             return result
-        except asyncio.TimeoutError:
-            raise MCPTimeoutError(self.timeout)
+        except asyncio.TimeoutError as e:
+            raise MCPTimeoutError(self.timeout) from e
         except Exception as e:
             logger.error(f"Error calling tool '{tool_name}': {e}")
             raise
@@ -264,6 +264,15 @@ class MCPClientManager:
             config_path: Path to configuration file
         """
         try:
+            file_size = config_path.stat().st_size
+            max_size = 5 * 1024 * 1024  # 5MB limit for MCP config files
+            if file_size > max_size:
+                logger.error(
+                    f"Config file too large ({file_size} bytes): {config_path}. "
+                    f"Maximum allowed: {max_size} bytes"
+                )
+                return
+
             with open(config_path, encoding="utf-8") as f:
                 data = json.load(f)
 

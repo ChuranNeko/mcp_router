@@ -24,32 +24,39 @@ logger = get_logger(__name__)
 # 全局变量用于清理
 _watcher = None
 _client_manager = None
+_shutdown_requested = False
 
 
 def cleanup():
-    """清理所有资源"""
-    global _watcher, _client_manager
+    """同步清理资源（仅处理不需要事件循环的资源）"""
+    global _watcher
     if _watcher:
         try:
             _watcher.stop()
         except Exception:
             pass
-    if _client_manager:
-        try:
-            asyncio.run(_client_manager.shutdown())
-        except Exception:
-            pass
 
 
 def signal_handler(signum, frame):
-    """处理系统信号"""
-    logger.info(f"接收到信号 {signum}，正在关闭...")
-    cleanup()
-    sys.exit(0)
+    """处理系统信号 - 第一次优雅关闭，第二次强制退出"""
+    global _shutdown_requested
+
+    if _shutdown_requested:
+        # 第二次 Ctrl+C - 强制退出
+        logger.warning("强制退出...")
+        cleanup()
+        sys.exit(1)
+    else:
+        # 第一次 Ctrl+C - 优雅关闭
+        logger.info(f"接收到信号 {signum}，正在优雅关闭... (再次按 Ctrl+C 强制退出)")
+        _shutdown_requested = True
+        raise KeyboardInterrupt
 
 
-# 注册清理函数和信号处理
+# 注册清理函数
 atexit.register(cleanup)
+
+# 注册信号处理（支持两次 Ctrl+C）
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
@@ -167,12 +174,15 @@ async def run_mcp_server(config: ConfigManager):
 
     # 并发运行：服务器 + 后台加载客户端 + 配置监视
     host = config.get("server.host", "127.0.0.1")
-    port = config.get("server.port", 3000)
 
     if transport_type == "stdio":
         tasks = [server.run(), load_clients_in_background()]
     else:
-        # SSE/HTTP需要host和port
+        # SSE/HTTP需要host和port - 根据传输模式获取对应端口
+        port_key = f"server.{transport_type}.port"
+        default_ports = {"http": 3000, "sse": 3001}
+        port = config.get(port_key, default_ports.get(transport_type, 3000))
+        logger.info(f"MCP Server will listen on {host}:{port} ({transport_type} mode)")
         tasks = [server.run(host, port), load_clients_in_background()]
 
     if watcher_queue:
@@ -180,12 +190,18 @@ async def run_mcp_server(config: ConfigManager):
 
     try:
         await asyncio.gather(*tasks)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down MCP server...")
     finally:
         if watcher:
-            watcher.stop()
-        await client_manager.shutdown()
+            try:
+                watcher.stop()
+            except Exception as e:
+                logger.error(f"Error stopping watcher: {e}")
+        try:
+            await client_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down client manager: {e}")
 
 
 async def run_api_server(config: ConfigManager):
@@ -276,12 +292,18 @@ async def run_api_server(config: ConfigManager):
 
     try:
         await asyncio.gather(*tasks)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down API server...")
     finally:
         if watcher:
-            watcher.stop()
-        await client_manager.shutdown()
+            try:
+                watcher.stop()
+            except Exception as e:
+                logger.error(f"Error stopping watcher: {e}")
+        try:
+            await client_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down client manager: {e}")
 
 
 async def run_combined_mode(config: ConfigManager):
@@ -323,7 +345,6 @@ async def run_combined_mode(config: ConfigManager):
         allow_management = config.get("server.allow_instance_management", False)
         transport_type = config.get("server.transport_type", "stdio")
         host = config.get("server.host", "127.0.0.1")
-        port = config.get("server.port", 3000)
 
         server = MCPServer(
             router,
@@ -334,6 +355,11 @@ async def run_combined_mode(config: ConfigManager):
         if transport_type == "stdio":
             await server.run()
         else:
+            # 根据传输模式获取对应端口
+            port_key = f"server.{transport_type}.port"
+            default_ports = {"http": 3000, "sse": 3001}
+            port = config.get(port_key, default_ports.get(transport_type, 3000))
+            logger.info(f"MCP Server listening on {host}:{port} ({transport_type} mode)")
             await server.run(host, port)
 
     async def run_api():
@@ -394,12 +420,77 @@ async def run_combined_mode(config: ConfigManager):
 
     try:
         await asyncio.gather(*tasks)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down MCP Router...")
     finally:
         if watcher:
-            watcher.stop()
-        await client_manager.shutdown()
+            try:
+                watcher.stop()
+            except Exception as e:
+                logger.error(f"Error stopping watcher: {e}")
+        try:
+            await client_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down client manager: {e}")
+
+
+def parse_args_for_help():
+    """显示帮助信息"""
+    parser = argparse.ArgumentParser(
+        description="MCP Router - A routing/proxy system for MCP servers",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # Stdio模式（默认，用于Cursor/Claude Desktop）
+  python main.py
+  python main.py stdio
+
+  # HTTP模式（多客户端）
+  python main.py http
+
+  # SSE模式（实时推送）
+  python main.py sse
+
+  # API服务器模式（单独启动，无论配置如何）
+  python main.py api
+
+  # 显示帮助信息
+  python main.py help
+
+注意：
+  - 传输模式默认为stdio
+  - API服务器是否启动由config.json中的api.enabled决定（除非使用 api 参数）
+  - HTTP/SSE的host和port在config.json中配置
+        """,
+    )
+
+    parser.add_argument(
+        "transport",
+        nargs="?",
+        default="stdio",
+        choices=["stdio", "http", "sse", "api", "help"],
+        help="MCP传输模式或命令 (默认: stdio)",
+    )
+
+    parser.add_argument(
+        "-c",
+        "--config",
+        metavar="FILE",
+        default="config.json",
+        help="配置文件路径 (默认: config.json)",
+    )
+
+    parser.add_argument(
+        "-l",
+        "--log-level",
+        metavar="LEVEL",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "OFF"],
+        help="日志级别",
+    )
+
+    parser.add_argument("-v", "--version", action="version", version=f"MCP Router v{__version__}")
+
+    parser.print_help()
 
 
 def parse_args():
@@ -412,19 +503,22 @@ def parse_args():
   # Stdio模式（默认，用于Cursor/Claude Desktop）
   python main.py
   python main.py stdio
-  
+
   # HTTP模式（多客户端）
   python main.py http
-  
+
   # SSE模式（实时推送）
   python main.py sse
-  
-  # HTTP+SSE混合模式（推荐）
-  python main.py http+sse
-  
+
+  # API服务器模式（单独启动，无论配置如何）
+  python main.py api
+
+  # 显示帮助信息
+  python main.py help
+
 注意：
   - 传输模式默认为stdio
-  - API服务器是否启动由config.json中的api.enabled决定
+  - API服务器是否启动由config.json中的api.enabled决定（除非使用 api 参数）
   - HTTP/SSE的host和port在config.json中配置
         """,
     )
@@ -433,8 +527,8 @@ def parse_args():
         "transport",
         nargs="?",
         default="stdio",
-        choices=["stdio", "http", "sse", "http+sse"],
-        help="MCP传输模式 (默认: stdio)",
+        choices=["stdio", "http", "sse", "api", "help"],
+        help="MCP传输模式或命令 (默认: stdio)",
     )
 
     parser.add_argument(
@@ -464,24 +558,43 @@ def main():
         # 解析命令行参数
         args = parse_args()
 
+        # 处理 help 命令
+        if args.transport == "help":
+            parse_args_for_help()
+            return
+
         # 加载配置文件
         config = ConfigManager(args.config)
 
         # 从命令行获取传输模式
         transport_type = args.transport
 
-        # 日志配置（命令行优先，传入transport_type用于日志文件命名）
+        # 处理 api 命令（单独启动 API 服务器）
+        if transport_type == "api":
+            # API 模式下使用 "api" 作为日志文件名标识
+            log_mode = "api"
+        else:
+            # 其他模式使用传输类型作为日志文件名标识
+            log_mode = transport_type
+
+        # 日志配置（命令行优先，传入log_mode用于日志文件命名）
         log_level = args.log_level or config.get("logging.level", "INFO")
         setup_logging(
             level=log_level,
             log_format=config.get("logging.format"),
             log_directory=config.get("logging.directory", "logs"),
-            transport_mode=transport_type,  # 传递传输模式给日志系统
+            transport_mode=log_mode,  # 传递模式给日志系统
         )
 
         logger.info("=" * 60)
         logger.info(f"MCP Router v{__version__}")
         logger.info("=" * 60)
+
+        # 如果是 api 命令，直接启动 API 服务器
+        if transport_type == "api":
+            logger.info("Mode: API ONLY (forced by command line)")
+            asyncio.run(run_api_server(config))
+            return
 
         # 确定运行模式
         # MCP服务器始终启动（使用命令行指定的传输模式）
@@ -509,9 +622,8 @@ def main():
         else:
             asyncio.run(run_mcp_server(config))
 
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        sys.exit(0)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Shutting down gracefully...")
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)

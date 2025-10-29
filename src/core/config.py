@@ -32,6 +32,13 @@ class ConfigManager:
             return
 
         try:
+            file_size = self.config_path.stat().st_size
+            max_size = 10 * 1024 * 1024  # 10MB limit
+            if file_size > max_size:
+                raise ConfigurationError(
+                    f"Config file too large ({file_size} bytes). Maximum allowed: {max_size} bytes"
+                )
+
             with open(self.config_path, encoding="utf-8") as f:
                 content = f.read().strip()
                 if not content:
@@ -42,9 +49,9 @@ class ConfigManager:
                 self._config = json.loads(content)
             logger.info(f"Configuration loaded from {self.config_path}")
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in config file: {e}")
+            raise ConfigurationError(f"Invalid JSON in config file: {e}") from e
         except Exception as e:
-            raise ConfigurationError(f"Failed to load config: {e}")
+            raise ConfigurationError(f"Failed to load config: {e}") from e
 
     def save(self) -> None:
         """Save configuration to file."""
@@ -54,7 +61,7 @@ class ConfigManager:
                 json.dump(self._config, f, indent=2, ensure_ascii=False)
             logger.info(f"Configuration saved to {self.config_path}")
         except Exception as e:
-            raise ConfigurationError(f"Failed to save config: {e}")
+            raise ConfigurationError(f"Failed to save config: {e}") from e
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value.

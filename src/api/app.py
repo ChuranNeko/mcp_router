@@ -1,7 +1,9 @@
 """FastAPI application setup."""
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from .. import __version__
 from ..core.logger import get_logger
@@ -11,6 +13,48 @@ from ..utils.websocket_logger import get_websocket_handler
 from .routes import create_router
 
 logger = get_logger(__name__)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware to add security headers to responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        """Add security headers to response."""
+        response = await call_next(request)
+
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+
+        return response
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Middleware to limit request body size."""
+
+    def __init__(self, app, max_size: int = 10 * 1024 * 1024):
+        """Initialize middleware.
+
+        Args:
+            app: FastAPI application
+            max_size: Maximum request body size in bytes (default: 10MB)
+        """
+        super().__init__(app)
+        self.max_size = max_size
+
+    async def dispatch(self, request: Request, call_next):
+        """Check request body size."""
+        if request.method in ["POST", "PUT", "PATCH"]:
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > self.max_size:
+                return Response(
+                    content=f"Request body too large. Maximum size: {self.max_size} bytes",
+                    status_code=413,
+                )
+
+        return await call_next(request)
 
 
 def create_app(
@@ -58,6 +102,9 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestSizeLimitMiddleware, max_size=10 * 1024 * 1024)
 
     api_router = create_router(mcp_router, security_manager)
     app.include_router(api_router, prefix="/api")
