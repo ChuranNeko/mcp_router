@@ -53,8 +53,8 @@ class MCPServer:
     def _register_handlers(self) -> None:
         """Register MCP server handlers."""
 
-        @self.server.list_tools()
-        async def list_tools() -> list[Tool]:
+        # 定义处理器函数，同时保存引用供 HTTP 模式使用
+        async def list_tools_impl() -> list[Tool]:
             """List all available router tools."""
             # 基础只读工具（总是可用）
             tools = [
@@ -190,8 +190,15 @@ class MCPServer:
 
             return tools
 
-        @self.server.call_tool()
-        async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
+        # 保存引用供 HTTP 模式使用
+        self._list_tools_impl = list_tools_impl
+
+        # 注册到 MCP server
+        @self.server.list_tools()
+        async def list_tools() -> list[Tool]:
+            return await list_tools_impl()
+
+        async def call_tool_impl(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
             """Handle tool calls."""
             try:
                 logger.info(f"Received tool call: {name}")
@@ -259,6 +266,14 @@ class MCPServer:
                     ensure_ascii=False,
                 )
                 return [TextContent(type="text", text=error_text)]
+
+        # 保存引用供 HTTP 模式使用
+        self._call_tool_impl = call_tool_impl
+
+        # 注册到 MCP server
+        @self.server.call_tool()
+        async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
+            return await call_tool_impl(name, arguments)
 
     async def run(self, host: str = "127.0.0.1", port: int = 8000) -> None:
         """Run the MCP server using specified transport.
@@ -375,14 +390,14 @@ class MCPServer:
 
                         # 处理 tools/list
                         if method == "tools/list":
-                            tools = await self.server._tool_manager.list_tools()
+                            tools = await self._list_tools_impl()
                             result = {"tools": [tool.model_dump() for tool in tools]}
 
                         # 处理 tools/call
                         elif method == "tools/call":
                             tool_name = params.get("name")
                             arguments = params.get("arguments", {})
-                            call_result = await self.server._tool_manager.call_tool(
+                            call_result = await self._call_tool_impl(
                                 tool_name, arguments
                             )
                             result = {"content": [c.model_dump() for c in call_result]}
