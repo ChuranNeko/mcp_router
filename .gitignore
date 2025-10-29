@@ -41,6 +41,9 @@ data/
 # ruff
 .ruff_cache/
 
+# uv.lock
+uv.lock
+
 # Releases
 Releases.md
 
