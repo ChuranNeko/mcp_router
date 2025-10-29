@@ -1,6 +1,9 @@
 """MCP Router - Main entry point."""
 
+import argparse
 import asyncio
+import atexit
+import signal
 import socket
 import sys
 from pathlib import Path
@@ -17,6 +20,38 @@ from src.utils.security import SecurityManager
 from src.utils.watcher import FileWatcher
 
 logger = get_logger(__name__)
+
+# 全局变量用于清理
+_watcher = None
+_client_manager = None
+
+
+def cleanup():
+    """清理所有资源"""
+    global _watcher, _client_manager
+    if _watcher:
+        try:
+            _watcher.stop()
+        except Exception:
+            pass
+    if _client_manager:
+        try:
+            asyncio.run(_client_manager.shutdown())
+        except Exception:
+            pass
+
+
+def signal_handler(signum, frame):
+    """处理系统信号"""
+    logger.info(f"接收到信号 {signum}，正在关闭...")
+    cleanup()
+    sys.exit(0)
+
+
+# 注册清理函数和信号处理
+atexit.register(cleanup)
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 
 def find_available_port(host: str, start_port: int, max_attempts: int = 100) -> int:
@@ -81,18 +116,22 @@ async def poll_watcher_queue(queue, client_manager):
 
 
 async def run_mcp_server(config: ConfigManager):
-    """Run MCP server mode (stdio).
+    """Run MCP server mode with specified transport.
 
     Args:
         config: Configuration manager
     """
-    logger.info("Starting MCP Router in SERVER mode (stdio)...")
+    global _watcher, _client_manager
+
+    transport_type = config.get("server.transport_type", "stdio")
+    logger.info(f"Starting MCP Router in SERVER mode ({transport_type})...")
 
     timeout = config.get("mcp_client.timeout", 30.0)
     data_path = config.get("watcher.watch_path", "data")
 
     # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
+    _client_manager = client_manager
     router = MCPRouter(client_manager)
 
     watcher = None
@@ -103,12 +142,20 @@ async def run_mcp_server(config: ConfigManager):
             watch_path=data_path,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
+        _watcher = watcher
         watcher_queue = watcher.start()
 
     # 初始化并启动 MCP 服务器（立即启动，不等待客户端加载）
     allow_management = config.get("server.allow_instance_management", False)
-    server = MCPServer(router, name="mcp_router", allow_instance_management=allow_management)
-    logger.info(f"MCP Server ready - starting service... (management: {allow_management})")
+    server = MCPServer(
+        router,
+        name="mcp_router",
+        allow_instance_management=allow_management,
+        transport_type=transport_type,
+    )
+    logger.info(
+        f"MCP Server ready - starting service... (management: {allow_management}, transport: {transport_type})"
+    )
 
     async def load_clients_in_background():
         """在后台加载客户端配置"""
@@ -119,7 +166,15 @@ async def run_mcp_server(config: ConfigManager):
             logger.error(f"Error loading MCP clients: {e}", exc_info=True)
 
     # 并发运行：服务器 + 后台加载客户端 + 配置监视
-    tasks = [server.run(), load_clients_in_background()]
+    host = config.get("server.host", "127.0.0.1")
+    port = config.get("server.port", 3000)
+
+    if transport_type == "stdio":
+        tasks = [server.run(), load_clients_in_background()]
+    else:
+        # SSE/HTTP需要host和port
+        tasks = [server.run(host, port), load_clients_in_background()]
+
     if watcher_queue:
         tasks.append(poll_watcher_queue(watcher_queue, client_manager))
 
@@ -139,6 +194,8 @@ async def run_api_server(config: ConfigManager):
     Args:
         config: Configuration manager
     """
+    global _watcher, _client_manager
+
     from src.api.app import create_app
 
     logger.info("Starting MCP Router in API mode...")
@@ -148,6 +205,7 @@ async def run_api_server(config: ConfigManager):
 
     # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
+    _client_manager = client_manager
     router = MCPRouter(client_manager)
 
     security_manager = SecurityManager(
@@ -163,6 +221,7 @@ async def run_api_server(config: ConfigManager):
             watch_path=data_path,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
+        _watcher = watcher
         watcher_queue = watcher.start()
 
     # 创建 API 应用（立即启动，不等待客户端加载）
@@ -231,6 +290,8 @@ async def run_combined_mode(config: ConfigManager):
     Args:
         config: Configuration manager
     """
+    global _watcher, _client_manager
+
     logger.info("Starting MCP Router in COMBINED mode...")
 
     timeout = config.get("mcp_client.timeout", 30.0)
@@ -238,6 +299,7 @@ async def run_combined_mode(config: ConfigManager):
 
     # 初始化管理器
     client_manager = MCPClientManager(data_path=data_path, timeout=timeout)
+    _client_manager = client_manager
     router = MCPRouter(client_manager)
 
     security_manager = SecurityManager(
@@ -253,13 +315,26 @@ async def run_combined_mode(config: ConfigManager):
             watch_path=data_path,
             debounce_delay=config.get("watcher.debounce_delay", 1.0),
         )
+        _watcher = watcher
         watcher_queue = watcher.start()
 
     async def run_mcp():
-        """Run MCP stdio server."""
+        """Run MCP server."""
         allow_management = config.get("server.allow_instance_management", False)
-        server = MCPServer(router, name="mcp_router", allow_instance_management=allow_management)
-        await server.run()
+        transport_type = config.get("server.transport_type", "stdio")
+        host = config.get("server.host", "127.0.0.1")
+        port = config.get("server.port", 3000)
+
+        server = MCPServer(
+            router,
+            name="mcp_router",
+            allow_instance_management=allow_management,
+            transport_type=transport_type,
+        )
+        if transport_type == "stdio":
+            await server.run()
+        else:
+            await server.run(host, port)
 
     async def run_api():
         """Run API server."""
@@ -327,37 +402,112 @@ async def run_combined_mode(config: ConfigManager):
         await client_manager.shutdown()
 
 
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="MCP Router - A routing/proxy system for MCP servers",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # Stdio模式（默认，用于Cursor/Claude Desktop）
+  python main.py
+  python main.py stdio
+  
+  # HTTP模式（多客户端）
+  python main.py http
+  
+  # SSE模式（实时推送）
+  python main.py sse
+  
+  # HTTP+SSE混合模式（推荐）
+  python main.py http+sse
+  
+注意：
+  - 传输模式默认为stdio
+  - API服务器是否启动由config.json中的api.enabled决定
+  - HTTP/SSE的host和port在config.json中配置
+        """,
+    )
+
+    parser.add_argument(
+        "transport",
+        nargs="?",
+        default="stdio",
+        choices=["stdio", "http", "sse", "http+sse"],
+        help="MCP传输模式 (默认: stdio)",
+    )
+
+    parser.add_argument(
+        "-c",
+        "--config",
+        metavar="FILE",
+        default="config.json",
+        help="配置文件路径 (默认: config.json)",
+    )
+
+    parser.add_argument(
+        "-l",
+        "--log-level",
+        metavar="LEVEL",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "OFF"],
+        help="日志级别",
+    )
+
+    parser.add_argument("-v", "--version", action="version", version=f"MCP Router v{__version__}")
+
+    return parser.parse_args()
+
+
 def main():
     """Main entry point."""
     try:
-        config = ConfigManager("config.json")
+        # 解析命令行参数
+        args = parse_args()
 
-        # Minecraft风格日志配置
+        # 加载配置文件
+        config = ConfigManager(args.config)
+
+        # 从命令行获取传输模式
+        transport_type = args.transport
+
+        # 日志配置（命令行优先，传入transport_type用于日志文件命名）
+        log_level = args.log_level or config.get("logging.level", "INFO")
         setup_logging(
-            level=config.get("logging.level", "INFO"),
+            level=log_level,
             log_format=config.get("logging.format"),
             log_directory=config.get("logging.directory", "logs"),
+            transport_mode=transport_type,  # 传递传输模式给日志系统
         )
 
         logger.info("=" * 60)
         logger.info(f"MCP Router v{__version__}")
         logger.info("=" * 60)
 
+        # 确定运行模式
+        # MCP服务器始终启动（使用命令行指定的传输模式）
+        server_enabled = True
+        # API服务器根据配置文件决定
         api_enabled = config.get("api.enabled", False)
-        server_enabled = config.get("server.enabled", True)
 
         if server_enabled and api_enabled:
-            logger.info("Mode: COMBINED (MCP Server + API)")
-            asyncio.run(run_combined_mode(config))
-        elif server_enabled:
-            logger.info("Mode: MCP SERVER (stdio)")
-            asyncio.run(run_mcp_server(config))
-        elif api_enabled:
-            logger.info("Mode: API ONLY")
-            asyncio.run(run_api_server(config))
+            mode = "combined"
         else:
-            logger.error("No mode enabled! Please enable either 'server' or 'api' in config.json")
-            sys.exit(1)
+            mode = "server"
+
+        # 显示运行模式
+        if mode == "combined":
+            logger.info(f"Mode: COMBINED (MCP Server [{transport_type}] + API)")
+        else:
+            logger.info(f"Mode: MCP SERVER ({transport_type})")
+
+        # 覆盖配置文件中的传输类型
+        config._config["server"]["transport_type"] = transport_type
+
+        # 运行对应模式
+        if mode == "combined":
+            asyncio.run(run_combined_mode(config))
+        else:
+            asyncio.run(run_mcp_server(config))
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

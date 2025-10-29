@@ -3,15 +3,25 @@
 from collections.abc import Sequence
 from typing import Any
 
+from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
-
-from mcp.server import Server
 
 from ..core.logger import get_logger
 from .router import MCPRouter
 
 logger = get_logger(__name__)
+
+# 可选的SSE/HTTP传输支持
+try:
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+
+    SSE_AVAILABLE = True
+except ImportError:
+    SSE_AVAILABLE = False
+    logger.warning("SSE transport not available. Install mcp[sse] for SSE support.")
 
 
 class MCPServer:
@@ -22,6 +32,7 @@ class MCPServer:
         router: MCPRouter,
         name: str = "mcp_router",
         allow_instance_management: bool = False,
+        transport_type: str = "stdio",
     ):
         """Initialize MCP server.
 
@@ -29,10 +40,12 @@ class MCPServer:
             router: MCP router instance
             name: Server name
             allow_instance_management: Whether to allow LLM to manage instances (add/remove/enable/disable)
+            transport_type: Transport type (stdio, sse, http)
         """
         self.router = router
         self.name = name
         self.allow_instance_management = allow_instance_management
+        self.transport_type = transport_type
         self.server = Server(name)
 
         self._register_handlers()
@@ -247,14 +260,137 @@ class MCPServer:
                 )
                 return [TextContent(type="text", text=error_text)]
 
-    async def run(self) -> None:
-        """Run the MCP server using stdio transport."""
-        logger.info(f"Starting MCP server '{self.name}' with stdio transport...")
+    async def run(self, host: str = "127.0.0.1", port: int = 8000) -> None:
+        """Run the MCP server using specified transport.
 
-        async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream, write_stream, self.server.create_initialization_options()
+        Args:
+            host: Host address (for SSE/HTTP)
+            port: Port number (for SSE/HTTP)
+        """
+        if self.transport_type == "stdio":
+            logger.info(f"Starting MCP server '{self.name}' with stdio transport...")
+            async with stdio_server() as (read_stream, write_stream):
+                await self.server.run(
+                    read_stream, write_stream, self.server.create_initialization_options()
+                )
+        elif self.transport_type in ["sse", "http", "http+sse"]:
+            # 检查SSE依赖
+            if self.transport_type in ["sse", "http+sse"] and not SSE_AVAILABLE:
+                raise RuntimeError(
+                    "SSE transport is not available. "
+                    "Please install with: pip install 'mcp[sse]' or use transport_type='stdio'"
+                )
+
+            import uvicorn
+            from starlette.requests import Request
+            from starlette.responses import JSONResponse
+            import json
+
+            routes = []
+
+            # SSE传输端点
+            if self.transport_type in ["sse", "http+sse"]:
+                from mcp.server.sse import SseServerTransport
+                from starlette.responses import Response
+
+                logger.info(f"Enabling SSE transport on {host}:{port}/sse")
+                sse_transport = SseServerTransport("/messages")
+
+                async def handle_sse(request):
+                    async with sse_transport.connect_sse(
+                        request.scope, request.receive, request._send
+                    ) as streams:
+                        await self.server.run(
+                            streams[0], streams[1], self.server.create_initialization_options()
+                        )
+
+                # 使用ASGI接口直接处理POST消息
+                async def handle_post_message_asgi(scope, receive, send):
+                    """ASGI endpoint处理SSE的POST消息"""
+                    await sse_transport.handle_post_message(scope, receive, send)
+
+                routes.extend(
+                    [
+                        Route("/sse", endpoint=handle_sse),
+                        # 使用Mount来包装ASGI app
+                        Mount("/messages", app=handle_post_message_asgi, name="messages"),
+                    ]
+                )
+
+            # HTTP传输端点
+            if self.transport_type in ["http", "http+sse"]:
+                logger.info(f"Enabling HTTP transport on {host}:{port}/mcp")
+
+                async def handle_http(request: Request):
+                    """Handle HTTP JSON-RPC requests."""
+                    try:
+                        data = await request.json()
+                        method = data.get("method")
+                        params = data.get("params", {})
+
+                        if method == "tools/list":
+                            tools = await self.server._tool_manager.list_tools()
+                            result = {"tools": [tool.model_dump() for tool in tools]}
+                        elif method == "tools/call":
+                            tool_name = params.get("name")
+                            arguments = params.get("arguments", {})
+                            result = await self.server._tool_manager.call_tool(tool_name, arguments)
+                            result = {"content": [c.model_dump() for c in result]}
+                        else:
+                            return JSONResponse(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "id": data.get("id"),
+                                    "error": {
+                                        "code": -32601,
+                                        "message": f"Method not found: {method}",
+                                    },
+                                },
+                                status_code=400,
+                            )
+
+                        return JSONResponse(
+                            {"jsonrpc": "2.0", "id": data.get("id"), "result": result}
+                        )
+                    except Exception as e:
+                        logger.error(f"Error handling HTTP request: {e}", exc_info=True)
+                        return JSONResponse(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": data.get("id", None),
+                                "error": {"code": -32603, "message": str(e)},
+                            },
+                            status_code=500,
+                        )
+
+                routes.append(Route("/mcp", endpoint=handle_http, methods=["POST"]))
+
+            # 创建Starlette应用
+            starlette_app = Starlette(debug=True, routes=routes)
+
+            logger.info(f"Starting MCP server '{self.name}' on {host}:{port}")
+            logger.info(f"Available endpoints: {[route.path for route in routes]}")
+
+            # 配置uvicorn，让它不要干扰我们的日志系统
+            config = uvicorn.Config(
+                starlette_app,
+                host=host,
+                port=port,
+                log_config=None,  # 完全禁用uvicorn的日志配置
+                access_log=False,  # 禁用访问日志
             )
+
+            # 创建服务器但不让它配置日志
+            server = uvicorn.Server(config)
+
+            # uvicorn的serve()会尝试配置日志，我们需要阻止它
+            # 通过设置config.configure_logging = False来实现
+            server.config.configure_logging = False
+
+            logger.info(f"Uvicorn server configured on http://{host}:{port}")
+            await server.serve()
+        else:
+            raise ValueError(f"Unsupported transport type: {self.transport_type}")
 
     def get_server(self) -> Server:
         """Get underlying MCP server instance.

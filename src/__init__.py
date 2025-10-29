@@ -5,6 +5,6 @@ try:
 
     __version__ = version("mcp-router")
 except Exception:
-    __version__ = "1.0.5"  # Fallback version
+    __version__ = "1.0.6"  # Fallback version
 
 __all__ = ["__version__"]

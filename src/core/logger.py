@@ -20,8 +20,8 @@ class StdioNoiseFilter(logging.Filter):
         Returns:
             False if record should be filtered out, True otherwise
         """
-        # 过滤MCP客户端的JSON解析错误（由子进程的非JSON输出引起）
-        if record.name == "mcp.client.stdio" and record.levelno == logging.ERROR:
+        # 完全过滤掉MCP客户端的JSON解析错误（由子进程的非JSON输出引起）
+        if record.name == "mcp.client.stdio":
             msg = record.getMessage()
             # 已知的harmless错误模式
             harmless_patterns = [
@@ -30,11 +30,9 @@ class StdioNoiseFilter(logging.Filter):
                 "Apifox MCP Server",
                 "请阅读帮助文档",
             ]
+            # 完全过滤掉包含这些模式的消息
             if any(pattern in msg for pattern in harmless_patterns):
-                # 将这些消息降级为DEBUG级别
-                record.levelno = logging.DEBUG
-                record.levelname = "DEBUG"
-                return True  # 让日志记录器决定是否显示（根据当前级别）
+                return False
 
         return True
 
@@ -43,6 +41,7 @@ def setup_logging(
     level: str = "INFO",
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     log_directory: str = "logs",
+    transport_mode: str = "stdio",
 ) -> None:
     """Setup logging configuration with Minecraft-style log rotation.
 
@@ -50,6 +49,7 @@ def setup_logging(
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL, OFF)
         log_format: Log message format
         log_directory: Directory to store log files
+        transport_mode: Transport mode for log file naming (stdio/http/sse/http+sse)
     """
     if level == "OFF":
         logging.disable(logging.CRITICAL)
@@ -66,14 +66,14 @@ def setup_logging(
 
     formatter = logging.Formatter(log_format)
 
-    # 添加噪音过滤器到root logger
+    # 创建噪音过滤器
     noise_filter = StdioNoiseFilter()
-    root_logger.addFilter(noise_filter)
 
     # 控制台输出
     console_handler = logging.StreamHandler()
     console_handler.setLevel(numeric_level)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(noise_filter)  # 添加过滤器到处理器
     root_logger.addHandler(console_handler)
 
     # Minecraft风格的日志文件
@@ -82,7 +82,7 @@ def setup_logging(
 
     latest_log = log_dir / "latest.txt"
 
-    # 如果latest.txt存在，备份为时间戳文件
+    # 如果latest.txt存在，备份为时间戳文件（不带传输模式，因为是旧日志）
     if latest_log.exists():
         # 获取文件的修改时间
         mtime = latest_log.stat().st_mtime
@@ -101,11 +101,29 @@ def setup_logging(
         # 移动旧日志
         shutil.move(str(latest_log), str(backup_path))
 
-    # 创建新的latest.txt文件处理器
+    # 生成新的日志文件名（带传输模式）
+    now = datetime.now()
+    timestamp = now.strftime("%y.%m.%d-%H-%M")
+
+    # 如果同一分钟内有多个日志文件，添加序号
+    timestamped_log = log_dir / f"{timestamp}-{transport_mode}.txt"
+    counter = 1
+    while timestamped_log.exists():
+        timestamped_log = log_dir / f"{timestamp}-{transport_mode}-{counter}.txt"
+        counter += 1
+
+    # 创建文件处理器 - latest.txt和时间戳日志
     file_handler = logging.FileHandler(latest_log, mode="w", encoding="utf-8")
     file_handler.setLevel(numeric_level)
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(noise_filter)  # 添加过滤器到文件处理器
     root_logger.addHandler(file_handler)
+
+    timestamped_handler = logging.FileHandler(timestamped_log, mode="w", encoding="utf-8")
+    timestamped_handler.setLevel(numeric_level)
+    timestamped_handler.setFormatter(formatter)
+    timestamped_handler.addFilter(noise_filter)
+    root_logger.addHandler(timestamped_handler)
 
 
 def get_logger(name: str) -> logging.Logger:

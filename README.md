@@ -114,6 +114,8 @@ conda activate mcp_router
   "server": {
     "enabled": true,
     "transport_type": "stdio",
+    "host": "127.0.0.1",
+    "port": 3000,
     "allow_instance_management": false
   },
   "mcp_client": {
@@ -138,10 +140,16 @@ conda activate mcp_router
 ```
 
 **主要配置项说明**:
-- `auto_find_port`: 端口占用时自动递增查找可用端口
-- `enable_realtime_logs`: 启用WebSocket实时日志 (ws://host:port/ws)
-- `allow_instance_management`: 允许LLM管理实例 (add/remove/enable/disable)
+- `server.host`: HTTP/SSE模式的监听地址（默认：127.0.0.1）
+- `server.port`: HTTP/SSE模式的监听端口（默认：8000）
+- `server.allow_instance_management`: 允许LLM管理实例（默认：false）
+- `api.enabled`: 是否启动REST API服务器（默认：false）
+- `api.auto_find_port`: 端口占用时自动递增查找可用端口
+- `api.enable_realtime_logs`: 启用WebSocket实时日志 (ws://host:port/ws)
 - `logging.directory`: 日志目录，使用Minecraft风格 (latest.txt + 时间戳备份)
+- `logging.level`: 日志级别（DEBUG/INFO/WARNING/ERROR）
+
+**注意**：传输模式（stdio/http/sse/http+sse）通过命令行参数指定，不在配置文件中设置。
 
 ### 添加MCP配置
 
@@ -166,30 +174,90 @@ conda activate mcp_router
 ### 运行
 
 ```bash
-# 使用 uv
-uv run python main.py
+# 直接指定传输模式（最简洁）
+python main.py                  # Stdio模式（默认）
+python main.py stdio            # Stdio模式
+python main.py http             # HTTP模式
+python main.py sse              # SSE模式
+python main.py http+sse         # HTTP+SSE混合模式
 
-# 或直接运行
-python main.py
+# 使用 uv
+uv run python main.py http+sse
+
+# 查看帮助
+python main.py -h
 ```
+
+**命令行参数**：
+```bash
+transport        MCP传输模式: stdio, http, sse, http+sse (默认: stdio)
+-c, --config     配置文件路径 (默认: config.json)
+-l, --log-level  日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL, OFF
+-v, --version    显示版本
+-h, --help       显示帮助
+```
+
+**重要说明**：
+- 传输模式通过命令行参数指定，简洁直观
+- API服务器是否启动由`config.json`中的`api.enabled`控制
+- HTTP/SSE的host和port在`config.json`中配置
+- 日志文件会自动包含传输模式标识（如：`25.10.29-09-00-stdio.txt`）
 
 ## 使用模式
 
-### 1. MCP Server 模式 (Stdio)
+### MCP传输模式
 
-适用于与 LLM 集成，通过 stdio 协议通信。
+MCP Router支持三种MCP传输协议：
+
+#### 1. Stdio模式（标准输入输出）
+
+适用于单个客户端，通过进程的标准输入输出通信。**最常用**。
 
 配置:
 ```json
 {
-  "api": {"enabled": false},
-  "server": {"enabled": true, "transport_type": "stdio"}
+  "server": {
+    "enabled": true,
+    "transport_type": "stdio"
+  }
 }
 ```
 
-### 2. API 模式
+#### 2. SSE模式（Server-Sent Events）
 
-仅启动 REST API 服务器，用于配置管理。
+适用于网页客户端，使用HTTP SSE协议实现服务端推送。
+
+配置:
+```json
+{
+  "server": {
+    "enabled": true,
+    "transport_type": "sse",
+    "host": "127.0.0.1",
+    "port": 3000
+  }
+}
+```
+
+#### 3. HTTP模式（HTTP POST）
+
+适用于简单的HTTP请求-响应模式。
+
+配置:
+```json
+{
+  "server": {
+    "enabled": true,
+    "transport_type": "http",
+    "host": "127.0.0.1",
+    "port": 3000
+  }
+}
+```
+
+### API模式
+
+独立于MCP传输的REST API服务器，用于配置管理。
 
 配置:
 ```json
@@ -199,15 +267,18 @@ python main.py
 }
 ```
 
-### 3. 组合模式
+### 组合模式
 
-同时运行 MCP Server 和 REST API。
+同时运行MCP Server和REST API。
 
 配置:
 ```json
 {
   "api": {"enabled": true},
-  "server": {"enabled": true}
+  "server": {
+    "enabled": true,
+    "transport_type": "stdio"
+  }
 }
 ```
 
@@ -253,19 +324,27 @@ MCP Router 提供以下工具给 LLM 使用：
 
 ## 与 LLM 集成
 
-在您的 LLM 客户端配置中添加：
+MCP Router支持三种MCP传输协议，根据需求选择：
 
+### 模式1: Stdio传输（推荐）
+
+适用于单个LLM客户端（如Claude Desktop、Cursor）通过stdio协议连接。
+
+**启动命令**:
+```bash
+python main.py stdio
+python main.py  # 默认stdio模式
+```
+
+**LLM客户端配置**（如Claude Desktop/Cursor的mcp.json）:
 ```json
 {
   "mcpServers": {
     "mcp_router": {
-      "isActive": true,
-      "name": "mcp_router",
-      "type": "stdio",
       "command": "uv",
       "args": [
         "--directory",
-        "path/to/mcp_router",
+        "C:/path/to/mcp_router",
         "run",
         "python",
         "main.py"
@@ -274,6 +353,325 @@ MCP Router 提供以下工具给 LLM 使用：
   }
 }
 ```
+
+或使用Python直接运行：
+```json
+{
+  "mcpServers": {
+    "mcp_router": {
+      "command": "python",
+      "args": [
+        "C:/path/to/mcp_router/main.py"
+      ],
+      "env": {
+        "PYTHONPATH": "C:/path/to/mcp_router"
+      }
+    }
+  }
+}
+```
+
+### 模式2: HTTP传输（多客户端）
+
+在同一端口上提供HTTP JSON-RPC端点，支持多客户端并发连接。
+
+**启动命令**:
+```bash
+python main.py http
+```
+
+**配置** (`config.json`):
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**MCP Router配置** (`config.json`):
+```json
+{
+  "server": {
+    "enabled": true,
+    "transport_type": "http",
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**端点**: `POST http://localhost:8000/mcp`
+
+**curl示例**:
+```bash
+# 列出工具
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# 调用工具
+curl -X POST http://localhost:8000/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":2,
+    "method":"tools/call",
+    "params":{
+      "name":"mcp.router.call",
+      "arguments":{
+        "instance_name":"openai_doc",
+        "tool_name":"read_project_oas_xxx",
+        "arguments":{}
+      }
+    }
+  }'
+```
+
+**Python客户端示例**:
+```python
+import httpx
+
+class MCPHTTPClient:
+    def __init__(self, base_url="http://localhost:8000"):
+        self.client = httpx.Client()
+        self.base_url = base_url
+        self.request_id = 0
+    
+    def call_method(self, method, params=None):
+        self.request_id += 1
+        response = self.client.post(f"{self.base_url}/mcp", json={
+            "jsonrpc": "2.0",
+            "id": self.request_id,
+            "method": method,
+            "params": params or {}
+        })
+        return response.json()
+    
+    def list_tools(self):
+        return self.call_method("tools/list")
+    
+    def call_tool(self, instance_name, tool_name, arguments):
+        return self.call_method("tools/call", {
+            "name": "mcp.router.call",
+            "arguments": {
+                "instance_name": instance_name,
+                "tool_name": tool_name,
+                "arguments": arguments
+            }
+        })
+
+# 使用示例
+client = MCPHTTPClient()
+tools = client.list_tools()
+print(tools)
+```
+
+### 模式3: SSE传输（实时推送）
+
+使用Server-Sent Events实现双向通信，适合需要实时推送的场景。
+
+**启动命令**:
+```bash
+python main.py sse
+```
+
+**配置** (`config.json`):
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**MCP Router配置** (`config.json`):
+```json
+{
+  "server": {
+    "enabled": true,
+    "transport_type": "sse",
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**端点**:
+- SSE连接: `GET http://localhost:8000/sse`
+- 消息发送: `POST http://localhost:8000/messages`
+
+**JavaScript客户端示例**:
+```javascript
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+
+const transport = new SSEClientTransport(
+  new URL("http://localhost:8000/sse")
+);
+const client = new Client(
+  { name: "my-client", version: "1.0.0" }, 
+  { capabilities: {} }
+);
+
+await client.connect(transport);
+const tools = await client.listTools();
+console.log(tools);
+```
+
+### 模式4: HTTP+SSE混合传输（推荐）
+
+在同一端口上同时提供HTTP和SSE端点，最大灵活性。
+
+**启动命令**:
+```bash
+python main.py http+sse
+```
+
+**配置** (`config.json`):
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**MCP Router配置** (`config.json`):
+```json
+{
+  "server": {
+    "enabled": true,
+    "transport_type": "http+sse",
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+**可用端点**:
+- HTTP: `POST http://localhost:8000/mcp`
+- SSE: `GET http://localhost:8000/sse` + `POST http://localhost:8000/messages`
+
+客户端可以根据需求选择HTTP或SSE方式连接。
+
+### 模式5: REST API（配置管理）
+
+除了MCP标准协议，Router还提供REST API用于配置管理和简单调用。
+
+**启动命令**:
+```bash
+# API模式需要在config.json中启用
+python main.py  # 或任意传输模式
+```
+
+**MCP Router配置** (`config.json`):
+```json
+{
+  "api": {
+    "enabled": true,
+    "port": 8000,
+    "host": "0.0.0.0",
+    "cors_origin": "*"
+  },
+  "server": {"enabled": false},
+  "security": {
+    "bearer_token": "your-secret-token-here",
+    "enable_validation": true
+  }
+}
+```
+
+**步骤2：客户端通过HTTP API访问**:
+```bash
+# 列出所有实例
+curl http://localhost:8000/api/instances \
+  -H "Authorization: Bearer your-secret-token-here"
+
+# 调用工具
+curl -X POST http://localhost:8000/api/call \
+  -H "Authorization: Bearer your-secret-token-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instance_name": "openai_doc",
+    "tool_name": "read_project_oas_xxx",
+    "arguments": {}
+  }'
+```
+
+**Python客户端示例**:
+```python
+import httpx
+
+client = httpx.Client(
+    base_url="http://localhost:8000",
+    headers={"Authorization": "Bearer your-secret-token-here"}
+)
+
+# 列出实例
+instances = client.get("/api/instances").json()
+print(instances)
+
+# 调用工具
+result = client.post("/api/call", json={
+    "instance_name": "openai_doc",
+    "tool_name": "read_project_oas_xxx",
+    "arguments": {}
+}).json()
+print(result)
+```
+
+### 混合模式（Stdio + API）
+
+同时支持单个stdio客户端和多个HTTP客户端。
+
+**步骤1：MCP Router配置** (`config.json`):
+```json
+{
+  "api": {
+    "enabled": true,
+    "port": 8000,
+    "host": "127.0.0.1"
+  },
+  "server": {
+    "enabled": true,
+    "transport_type": "stdio"
+  },
+  "security": {
+    "bearer_token": "your-secret-token-here",
+    "enable_validation": true
+  }
+}
+```
+
+**步骤2：客户端配置**
+
+**Stdio客户端**（如Claude Desktop/Cursor的mcp.json）：
+```json
+{
+  "mcpServers": {
+    "mcp_router": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:/path/to/mcp_router",
+        "run",
+        "python",
+        "main.py"
+      ]
+    }
+  }
+}
+```
+
+**HTTP客户端**：通过API访问（见上文"多客户端模式"的HTTP示例）
+
+这样配置后：
+- 一个客户端通过stdio连接（如Claude Desktop或Cursor）
+- 其他客户端通过HTTP API连接（如自定义应用、脚本等）
 
 ## 开发
 

@@ -5,5 +5,6 @@ pydantic>=2.0.0
 watchdog>=3.0.0
 python-dotenv>=1.0.0
 mcp>=1.0.0
+starlette>=0.27.0
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
