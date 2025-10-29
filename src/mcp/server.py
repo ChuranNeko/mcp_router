@@ -346,7 +346,7 @@ class MCPServer:
                         params = data.get("params", {})
                         request_id = data.get("id")
 
-                        logger.debug(f"HTTP request: method={method}, id={request_id}")
+                        logger.info(f"HTTP MCP request: method={method}, id={request_id}")
 
                         # 处理 initialize 方法
                         if method == "initialize":
@@ -367,7 +367,7 @@ class MCPServer:
 
                         # 处理 notifications/initialized (不需要响应)
                         if method == "notifications/initialized":
-                            logger.debug("Received initialized notification")
+                            logger.info("Received initialized notification via HTTP")
                             return JSONResponse({"jsonrpc": "2.0"})
 
                         # 其他方法需要先初始化
@@ -390,17 +390,21 @@ class MCPServer:
 
                         # 处理 tools/list
                         if method == "tools/list":
+                            logger.info("HTTP MCP: Listing tools")
                             tools = await self._list_tools_impl()
                             result = {"tools": [tool.model_dump() for tool in tools]}
+                            logger.info(f"HTTP MCP: Returning {len(tools)} tools")
 
                         # 处理 tools/call
                         elif method == "tools/call":
                             tool_name = params.get("name")
                             arguments = params.get("arguments", {})
+                            logger.info(f"HTTP MCP: Calling tool {tool_name}")
                             call_result = await self._call_tool_impl(
                                 tool_name, arguments
                             )
                             result = {"content": [c.model_dump() for c in call_result]}
+                            logger.info(f"HTTP MCP: Tool {tool_name} returned successfully")
 
                         # 处理 resources/list
                         elif method == "resources/list":
