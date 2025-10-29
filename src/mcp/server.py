@@ -393,7 +393,9 @@ class MCPServer:
                             logger.info("HTTP MCP: Listing tools")
                             tools = await self._list_tools_impl()
                             # 排除 None 值，只返回有实际内容的字段
-                            result = {"tools": [tool.model_dump(exclude_none=True) for tool in tools]}
+                            result = {
+                                "tools": [tool.model_dump(exclude_none=True) for tool in tools]
+                            }
                             logger.info(f"HTTP MCP: Returning {len(tools)} tools")
 
                         # 处理 tools/call
@@ -401,9 +403,7 @@ class MCPServer:
                             tool_name = params.get("name")
                             arguments = params.get("arguments", {})
                             logger.info(f"HTTP MCP: Calling tool {tool_name}")
-                            call_result = await self._call_tool_impl(
-                                tool_name, arguments
-                            )
+                            call_result = await self._call_tool_impl(tool_name, arguments)
                             result = {"content": [c.model_dump() for c in call_result]}
                             logger.info(f"HTTP MCP: Tool {tool_name} returned successfully")
 
