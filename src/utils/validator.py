@@ -7,6 +7,18 @@ from typing import Any
 from ..core.exceptions import ValidationError
 from ..core.logger import get_logger
 
+# Validation constants
+MAX_PROVIDER_NAME_LENGTH = 100
+MAX_INSTANCE_NAME_LENGTH = 100
+MAX_COMMAND_LENGTH = 1000
+MAX_ARG_LENGTH = 1000
+MAX_ARGS_COUNT = 100
+MAX_ENV_VAR_KEY_LENGTH = 200
+MAX_ENV_VAR_VALUE_LENGTH = 2000
+MAX_ENV_VARS_COUNT = 100
+MAX_METADATA_ENTRIES = 50
+MAX_STRING_INPUT_LENGTH = 10000
+
 logger = get_logger(__name__)
 
 
@@ -38,8 +50,10 @@ class InputValidator:
                 "Only alphanumeric characters, underscores, and hyphens are allowed"
             )
 
-        if len(name) > 100:
-            raise ValidationError("Provider name too long (max 100 characters)")
+        if len(name) > MAX_PROVIDER_NAME_LENGTH:
+            raise ValidationError(
+                f"Provider name too long (max {MAX_PROVIDER_NAME_LENGTH} characters)"
+            )
 
         return name
 
@@ -65,8 +79,10 @@ class InputValidator:
                 "Only alphanumeric characters, underscores, hyphens, and Chinese characters are allowed"
             )
 
-        if len(name) > 100:
-            raise ValidationError("Instance name too long (max 100 characters)")
+        if len(name) > MAX_INSTANCE_NAME_LENGTH:
+            raise ValidationError(
+                f"Instance name too long (max {MAX_INSTANCE_NAME_LENGTH} characters)"
+            )
 
         return name
 
@@ -134,8 +150,8 @@ class InputValidator:
         if "metadata" in config and config["metadata"] is not None:
             if not isinstance(config["metadata"], dict):
                 raise ValidationError("'metadata' must be a dictionary")
-            if len(config["metadata"]) > 50:
-                raise ValidationError("Too many metadata entries (max 50)")
+            if len(config["metadata"]) > MAX_METADATA_ENTRIES:
+                raise ValidationError(f"Too many metadata entries (max {MAX_METADATA_ENTRIES})")
 
         return config
 
@@ -163,8 +179,8 @@ class InputValidator:
                     "Commands with shell operators are not allowed"
                 )
 
-        if len(command) > 1000:
-            raise ValidationError("Command too long (max 1000 characters)")
+        if len(command) > MAX_COMMAND_LENGTH:
+            raise ValidationError(f"Command too long (max {MAX_COMMAND_LENGTH} characters)")
 
         return command
 
@@ -184,15 +200,15 @@ class InputValidator:
         if not isinstance(args, list):
             raise ValidationError("Arguments must be a list")
 
-        if len(args) > 100:
-            raise ValidationError("Too many arguments (max 100)")
+        if len(args) > MAX_ARGS_COUNT:
+            raise ValidationError(f"Too many arguments (max {MAX_ARGS_COUNT})")
 
         for arg in args:
             if not isinstance(arg, str):
                 raise ValidationError("All arguments must be strings")
 
-            if len(arg) > 1000:
-                raise ValidationError("Argument too long (max 1000 characters)")
+            if len(arg) > MAX_ARG_LENGTH:
+                raise ValidationError(f"Argument too long (max {MAX_ARG_LENGTH} characters)")
 
             dangerous_chars = [";", "|", "&", "$", "`", "\n", "\r"]
             for char in dangerous_chars:
@@ -220,15 +236,17 @@ class InputValidator:
         if not isinstance(env, dict):
             raise ValidationError("Environment variables must be a dictionary")
 
-        if len(env) > 100:
-            raise ValidationError("Too many environment variables (max 100)")
+        if len(env) > MAX_ENV_VARS_COUNT:
+            raise ValidationError(f"Too many environment variables (max {MAX_ENV_VARS_COUNT})")
 
         for key, value in env.items():
             if not isinstance(key, str) or not isinstance(value, str):
                 raise ValidationError("Environment variable keys and values must be strings")
 
-            if len(key) > 200 or len(value) > 2000:
-                raise ValidationError("Environment variable key or value too long")
+            if len(key) > MAX_ENV_VAR_KEY_LENGTH or len(value) > MAX_ENV_VAR_VALUE_LENGTH:
+                raise ValidationError(
+                    f"Environment variable key or value too long (max key: {MAX_ENV_VAR_KEY_LENGTH}, value: {MAX_ENV_VAR_VALUE_LENGTH})"
+                )
 
             if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", key):
                 raise ValidationError(
@@ -239,7 +257,7 @@ class InputValidator:
         return env
 
     @classmethod
-    def sanitize_string_input(cls, data: str, max_length: int = 10000) -> str:
+    def sanitize_string_input(cls, data: str, max_length: int = MAX_STRING_INPUT_LENGTH) -> str:
         """Sanitize string input to prevent XSS and injection attacks.
 
         Args:

@@ -19,6 +19,11 @@ from ..core.logger import get_logger
 from ..utils.validator import InputValidator
 from .transport import create_transport
 
+# Constants
+MAX_CONFIG_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+MAX_METADATA_ENTRIES = 50
+MAX_ENV_VARS = 100
+
 logger = get_logger(__name__)
 
 
@@ -61,9 +66,9 @@ class MCPClientInstance:
         self.timeout = timeout
 
         self._session: ClientSession | None = None
-        self._read_stream = None
-        self._write_stream = None
-        self._transport = None
+        self._read_stream: Any = None
+        self._write_stream: Any = None
+        self._transport: Any = None
         self._tools: dict[str, Any] = {}
         self._connected = False
 
@@ -106,30 +111,59 @@ class MCPClientInstance:
         if not self._connected:
             return
 
-        try:
-            # 先标记为未连接，避免重复断开
-            self._connected = False
+        # 先标记为未连接，避免重复断开
+        self._connected = False
 
-            # 使用 shield 保护断开操作，避免 cancel scope 错误
-            import asyncio
+        # 使用超时机制强制断开，避免进程卡住
+        disconnect_timeout = 2.0  # 2秒超时
 
-            if self._session:
-                try:
-                    await asyncio.shield(self._session.__aexit__(None, None, None))
-                except Exception as e:
-                    logger.debug(f"Session exit error (expected): {e}")
+        # 断开 session
+        if self._session:
+            try:
+                await asyncio.wait_for(
+                    self._session.__aexit__(None, None, None), timeout=disconnect_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.debug(f"Session exit timeout for '{self.name}', forcing disconnect")
+            except (ConnectionError, BrokenPipeError, OSError) as e:
+                logger.debug(f"Session exit error (expected): {e}")
+            except RuntimeError as e:
+                # 捕获 "cancel scope in different task" 错误（这是预期的，不影响功能）
+                error_msg = str(e).lower()
+                if "cancel scope" in error_msg and "different task" in error_msg:
+                    logger.debug(f"Session exit cancel scope error (expected): {e}")
+                else:
+                    logger.warning(f"Session exit error: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected session exit error: {e}")
 
-            if self._transport:
-                try:
-                    await asyncio.shield(self._transport.__aexit__(None, None, None))
-                except Exception as e:
-                    logger.debug(f"Transport exit error (expected): {e}")
+        # 断开 transport
+        if self._transport:
+            try:
+                await asyncio.wait_for(
+                    self._transport.__aexit__(None, None, None), timeout=disconnect_timeout
+                )
+            except asyncio.TimeoutError:
+                logger.debug(f"Transport exit timeout for '{self.name}', forcing disconnect")
+            except (ConnectionError, BrokenPipeError, OSError) as e:
+                logger.debug(f"Transport exit error (expected): {e}")
+            except RuntimeError as e:
+                # 捕获 "cancel scope in different task" 错误（这是预期的，不影响功能）
+                error_msg = str(e).lower()
+                if "cancel scope" in error_msg and "different task" in error_msg:
+                    logger.debug(f"Transport exit cancel scope error (expected): {e}")
+                else:
+                    logger.warning(f"Transport exit error: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected transport exit error: {e}")
 
-            self._tools = {}
-            self._transport = None
-            logger.info(f"Instance '{self.name}' disconnected")
-        except Exception as e:
-            logger.error(f"Error disconnecting instance '{self.name}': {e}")
+        # 清理资源
+        self._tools = {}
+        self._session = None
+        self._transport = None
+        self._read_stream = None
+        self._write_stream = None
+        logger.info(f"Instance '{self.name}' disconnected")
 
     async def _fetch_tools(self) -> None:
         """Fetch available tools from MCP server."""
@@ -265,11 +299,10 @@ class MCPClientManager:
         """
         try:
             file_size = config_path.stat().st_size
-            max_size = 5 * 1024 * 1024  # 5MB limit for MCP config files
-            if file_size > max_size:
+            if file_size > MAX_CONFIG_FILE_SIZE:
                 logger.error(
                     f"Config file too large ({file_size} bytes): {config_path}. "
-                    f"Maximum allowed: {max_size} bytes"
+                    f"Maximum allowed: {MAX_CONFIG_FILE_SIZE} bytes"
                 )
                 return
 
@@ -456,22 +489,44 @@ class MCPClientManager:
         for name, instance in self._instances.items():
             if instance.is_active and instance.is_connected():
                 tools = instance.get_tools()
-                result[name] = {
-                    "provider": instance.provider,
-                    "display_name": f"{name} (provider: {instance.provider})",
-                    "tools": list(tools.values()),
-                }
+                if tools:  # Only include instances with tools
+                    result[name] = {
+                        "provider": instance.provider,
+                        "display_name": f"{name} (provider: {instance.provider})",
+                        "tools": list(tools.values()),
+                    }
 
         return result
 
     async def shutdown(self) -> None:
-        """Shutdown all instances."""
+        """Shutdown all instances with timeout protection."""
         logger.info("Shutting down all MCP instances...")
 
+        # 并发断开所有实例，提高退出速度
+        disconnect_tasks = []
         for instance in self._instances.values():
+            task = asyncio.create_task(instance.disconnect())
+            disconnect_tasks.append((instance.name, task))
+
+        # 等待所有断开操作完成，设置总超时时间（每个实例2秒，最多等待10秒）
+        shutdown_timeout = min(len(disconnect_tasks) * 2.0, 10.0)
+        if disconnect_tasks:
             try:
-                await instance.disconnect()
-            except Exception as e:
-                logger.error(f"Error disconnecting instance '{instance.name}': {e}")
+                await asyncio.wait_for(
+                    asyncio.gather(*[task for _, task in disconnect_tasks], return_exceptions=True),
+                    timeout=shutdown_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Shutdown timeout after {shutdown_timeout}s, forcing exit")
+
+            # 记录任何错误
+            for name, task in disconnect_tasks:
+                try:
+                    if task.done():
+                        result = task.result()
+                        if isinstance(result, Exception):
+                            logger.warning(f"Error disconnecting instance '{name}': {result}")
+                except Exception as e:
+                    logger.warning(f"Error disconnecting instance '{name}': {e}")
 
         logger.info("All instances shut down")

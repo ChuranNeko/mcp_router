@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import atexit
+import json
 import signal
 import socket
 import sys
@@ -17,6 +18,7 @@ from src.mcp.client import MCPClientManager
 from src.mcp.router import MCPRouter
 from src.mcp.server import MCPServer
 from src.utils.security import SecurityManager
+from src.utils.validator import InputValidator
 from src.utils.watcher import FileWatcher
 
 logger = get_logger(__name__)
@@ -59,6 +61,26 @@ atexit.register(cleanup)
 # 注册信号处理（支持两次 Ctrl+C）
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+
+
+def _extract_name_from_config(data: dict) -> str | None:
+    """从配置字典中提取 name 字段。
+
+    Args:
+        data: 配置字典（可能是顶层对象或 mcpServers 格式）
+
+    Returns:
+        配置中的 name 字段值，如果不存在则返回 None
+    """
+    if isinstance(data, dict) and "mcpServers" in data and isinstance(data["mcpServers"], dict):
+        # mcpServers 格式：遍历子项
+        for _key, server_cfg in data["mcpServers"].items():
+            if isinstance(server_cfg, dict) and "name" in server_cfg:
+                return str(server_cfg["name"])
+    elif isinstance(data, dict) and "name" in data:
+        # 顶层对象格式：直接读取 name 字段
+        return str(data["name"])
+    return None
 
 
 def find_available_port(host: str, start_port: int, max_attempts: int = 100) -> int:
@@ -193,15 +215,28 @@ async def run_mcp_server(config: ConfigManager):
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down MCP server...")
     finally:
+        # 清理资源，使用超时保护确保不会卡住
+        cleanup_tasks = []
+
         if watcher:
             try:
                 watcher.stop()
             except Exception as e:
                 logger.error(f"Error stopping watcher: {e}")
-        try:
-            await client_manager.shutdown()
-        except Exception as e:
-            logger.error(f"Error shutting down client manager: {e}")
+
+        if client_manager:
+            cleanup_tasks.append(client_manager.shutdown())
+
+        # 等待清理完成，最多等待10秒
+        if cleanup_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*cleanup_tasks, return_exceptions=True), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Cleanup timeout, forcing exit")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
 
 
 async def run_api_server(config: ConfigManager):
@@ -295,15 +330,28 @@ async def run_api_server(config: ConfigManager):
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down API server...")
     finally:
+        # 清理资源，使用超时保护确保不会卡住
+        cleanup_tasks = []
+
         if watcher:
             try:
                 watcher.stop()
             except Exception as e:
                 logger.error(f"Error stopping watcher: {e}")
-        try:
-            await client_manager.shutdown()
-        except Exception as e:
-            logger.error(f"Error shutting down client manager: {e}")
+
+        if client_manager:
+            cleanup_tasks.append(client_manager.shutdown())
+
+        # 等待清理完成，最多等待10秒
+        if cleanup_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*cleanup_tasks, return_exceptions=True), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Cleanup timeout, forcing exit")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
 
 
 async def run_combined_mode(config: ConfigManager):
@@ -423,15 +471,28 @@ async def run_combined_mode(config: ConfigManager):
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutting down MCP Router...")
     finally:
+        # 清理资源，使用超时保护确保不会卡住
+        cleanup_tasks = []
+
         if watcher:
             try:
                 watcher.stop()
             except Exception as e:
                 logger.error(f"Error stopping watcher: {e}")
-        try:
-            await client_manager.shutdown()
-        except Exception as e:
-            logger.error(f"Error shutting down client manager: {e}")
+
+        if client_manager:
+            cleanup_tasks.append(client_manager.shutdown())
+
+        # 等待清理完成，最多等待10秒
+        if cleanup_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*cleanup_tasks, return_exceptions=True), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Cleanup timeout, forcing exit")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
 
 
 def parse_args_for_help():
@@ -468,7 +529,7 @@ def parse_args_for_help():
         "transport",
         nargs="?",
         default="stdio",
-        choices=["stdio", "http", "sse", "api", "help"],
+        choices=["stdio", "http", "sse", "api", "help", "add"],
         help="MCP传输模式或命令 (默认: stdio)",
     )
 
@@ -494,7 +555,7 @@ def parse_args_for_help():
 
 
 def parse_args():
-    """解析命令行参数"""
+    """解析命令行参数，返回(已知参数, 其余位置参数)"""
     parser = argparse.ArgumentParser(
         description="MCP Router - A routing/proxy system for MCP servers",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -527,7 +588,7 @@ def parse_args():
         "transport",
         nargs="?",
         default="stdio",
-        choices=["stdio", "http", "sse", "api", "help"],
+        choices=["stdio", "http", "sse", "api", "help", "add"],
         help="MCP传输模式或命令 (默认: stdio)",
     )
 
@@ -549,14 +610,16 @@ def parse_args():
 
     parser.add_argument("-v", "--version", action="version", version=f"MCP Router v{__version__}")
 
-    return parser.parse_args()
+    # 允许在 add 命令后附加位置参数，不作为未知参数报错
+    args, extra = parser.parse_known_args()
+    return args, extra
 
 
 def main():
     """Main entry point."""
     try:
-        # 解析命令行参数
-        args = parse_args()
+        # 解析命令行参数（兼容 add 的附加位置参数）
+        args, extra_args = parse_args()
 
         # 处理 help 命令
         if args.transport == "help":
@@ -568,6 +631,163 @@ def main():
 
         # 从命令行获取传输模式
         transport_type = args.transport
+
+        # 处理 add 命令（格式化目标文件夹的 mcp_settings.json 并写入 name 字段）
+        if transport_type == "add":
+            # 读取附加参数：实例名称、文件夹名称（provider）、可选的显示名称（可为中文）
+            if len(extra_args) < 2:
+                print("用法: python main.py add <实例名称> <文件夹名称> [显示名称]")
+                print("  实例名称: 必须与文件夹名称一致，仅允许 a-zA-Z0-9_-")
+                print("  文件夹名称: provider 字段，仅允许 a-zA-Z0-9_-")
+                print("  显示名称: 可选，name 字段，可为中文，如不提供则与实例名称相同")
+                return
+
+            instance_name = extra_args[0]
+            provider_name = extra_args[1]
+            display_name = extra_args[2] if len(extra_args) >= 3 else instance_name
+
+            # 硬性规定：文件夹名称为实例名称，且不得包含中文（仅允许 a-zA-Z0-9_-）
+            # 先校验 provider 命名合法性（不含中文）
+            InputValidator.validate_provider_name(provider_name)
+            # 实例名称必须与文件夹名称一致，且也使用 provider 规则校验，保证不含中文
+            if instance_name != provider_name:
+                raise ValueError(
+                    f"实例名称必须与文件夹名称一致: 实例='{instance_name}', 文件夹='{provider_name}'"
+                )
+            InputValidator.validate_provider_name(instance_name)
+
+            # 校验 provider 目录与文件
+            data_dir = Path(config.get("watcher.watch_path", "data"))
+            provider_dir = data_dir / provider_name
+            settings_path = provider_dir / "mcp_settings.json"
+
+            if not settings_path.exists():
+                raise FileNotFoundError(
+                    f"未找到配置文件: {settings_path}. 请确保文件存在且命名为 mcp_settings.json"
+                )
+
+            # 收集现有实例名称，确保唯一（排除当前文件）
+            # 注意：检查的是 name 字段的唯一性（可能包含中文），不是 instance_name
+            existing_names: set[str] = set()
+            for cfg_file in data_dir.glob("*/mcp_settings.json"):
+                # 排除当前正在处理的文件
+                if cfg_file == settings_path:
+                    continue
+                try:
+                    content = cfg_file.read_text(encoding="utf-8").strip()
+                    if not content:
+                        continue
+                    data = json.loads(content)
+                    name = _extract_name_from_config(data)
+                    if name:
+                        existing_names.add(name)
+                except Exception:
+                    # 跳过损坏/非法配置文件
+                    continue
+
+            if display_name in existing_names:
+                raise ValueError(f"实例名称已存在: {display_name}")
+
+            # 读取目标配置并写入 name 字段
+            raw = settings_path.read_text(encoding="utf-8").strip()
+            if not raw:
+                raise ValueError(f"配置文件为空: {settings_path}")
+
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"配置文件 JSON 解析失败: {e}") from e
+
+            updated = False
+            server_cfg = None
+
+            # 支持两种输入格式：mcpServers 包装格式 或 顶层对象格式
+            if (
+                isinstance(obj, dict)
+                and "mcpServers" in obj
+                and isinstance(obj["mcpServers"], dict)
+            ):
+                # mcpServers 格式：提取配置对象
+                servers = obj["mcpServers"]
+                if len(servers) != 1:
+                    raise ValueError(
+                        f"mcp_settings.json 中的 mcpServers 必须仅包含一个服务条目，当前: {len(servers)}"
+                    )
+                key = next(iter(servers.keys()))
+                server_cfg = servers[key]
+                if not isinstance(server_cfg, dict):
+                    raise ValueError("mcpServers 项格式非法，应为对象")
+                updated = True  # 从 mcpServers 格式转换需要更新
+            elif isinstance(obj, dict):
+                # 顶层对象格式：直接使用
+                server_cfg = dict(obj)
+            else:
+                raise ValueError("不支持的配置结构，应为对象或包含 mcpServers 的对象")
+
+            # 规范化配置字段（统一输出为顶层对象格式）
+            if server_cfg is not None:
+                # 确保 name 字段存在且正确（使用 display_name，可为中文）
+                if server_cfg.get("name") != display_name:
+                    server_cfg["name"] = display_name
+                    updated = True
+
+                # 确保 provider 字段存在
+                if server_cfg.get("provider") != provider_name:
+                    server_cfg["provider"] = provider_name
+                    updated = True
+
+                # 将 transport 字段转换为 type 字段（如果存在）
+                if "transport" in server_cfg and "type" not in server_cfg:
+                    server_cfg["type"] = server_cfg.pop("transport")
+                    updated = True
+                elif "transport" in server_cfg and "type" in server_cfg:
+                    # 如果两者都存在，删除 transport，保留 type
+                    server_cfg.pop("transport")
+                    updated = True
+
+                # 确保 type 字段存在（必需字段）
+                if "type" not in server_cfg:
+                    # 默认使用 stdio
+                    server_cfg["type"] = "stdio"
+                    updated = True
+                    logger.warning("配置缺少 type 字段，已设置为默认值 'stdio'")
+
+                # 确保 isActive 字段存在（默认 true）
+                if "isActive" not in server_cfg:
+                    server_cfg["isActive"] = True
+                    updated = True
+
+                # 统一输出为顶层对象格式（项目标准格式）
+                # 按标准字段顺序重新组织：name, type, command, args, env, isActive, provider
+                ordered_obj = {}
+                field_order = ["name", "type", "command", "args", "env", "isActive", "provider"]
+
+                # 按顺序添加字段
+                for field in field_order:
+                    if field in server_cfg:
+                        ordered_obj[field] = server_cfg[field]
+
+                # 添加其他未列出的字段（metadata等）
+                for key, value in server_cfg.items():
+                    if key not in field_order:
+                        ordered_obj[key] = value
+
+                obj = ordered_obj
+
+            # 总是写入规范化后的配置，确保字段顺序正确
+            settings_path.write_text(
+                json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            if updated:
+                logger.info(
+                    f"已更新 {settings_path}，规范化配置完成 (name: '{display_name}', provider: '{provider_name}')"
+                )
+            else:
+                logger.info(
+                    f"{settings_path} 配置已规范化，字段顺序已调整 (name: '{display_name}')"
+                )
+
+            return
 
         # 处理 api 命令（单独启动 API 服务器）
         if transport_type == "api":

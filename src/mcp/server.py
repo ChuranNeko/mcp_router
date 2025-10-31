@@ -1,5 +1,7 @@
 """MCP Server implementation."""
 
+import json
+import sys
 from collections.abc import Sequence
 from typing import Any
 
@@ -8,6 +10,7 @@ from mcp.types import TextContent, Tool
 
 from mcp.server import Server
 
+from .. import __version__
 from ..core.logger import get_logger
 from .router import MCPRouter
 
@@ -254,8 +257,6 @@ class MCPServer:
                 else:
                     raise ValueError(f"Unknown tool: {name}")
 
-                import json
-
                 result_text = json.dumps(result, ensure_ascii=False, indent=2)
 
                 return [TextContent(type="text", text=result_text)]
@@ -275,6 +276,44 @@ class MCPServer:
         async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
             return await call_tool_impl(name, arguments)
 
+    async def _handle_http_method(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Handle HTTP MCP method calls.
+
+        Args:
+            method: Method name
+            params: Method parameters
+
+        Returns:
+            Method result
+
+        Raises:
+            ValueError: If method is not supported
+        """
+        if method == "tools/list":
+            logger.info("HTTP MCP: Listing tools")
+            tools = await self._list_tools_impl()
+            result = {"tools": [tool.model_dump(exclude_none=True) for tool in tools]}
+            logger.info(f"HTTP MCP: Returning {len(tools)} tools")
+            return result
+
+        elif method == "tools/call":
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            logger.info(f"HTTP MCP: Calling tool {tool_name}")
+            call_result = await self._call_tool_impl(tool_name, arguments)
+            result = {"content": [c.model_dump() for c in call_result]}
+            logger.info(f"HTTP MCP: Tool {tool_name} returned successfully")
+            return result
+
+        elif method == "resources/list":
+            return {"resources": []}
+
+        elif method == "prompts/list":
+            return {"prompts": []}
+
+        else:
+            raise ValueError(f"Method not found: {method}")
+
     async def run(self, host: str = "127.0.0.1", port: int = 8000) -> None:
         """Run the MCP server using specified transport.
 
@@ -284,10 +323,20 @@ class MCPServer:
         """
         if self.transport_type == "stdio":
             logger.info(f"Starting MCP server '{self.name}' with stdio transport...")
-            async with stdio_server() as (read_stream, write_stream):
-                await self.server.run(
-                    read_stream, write_stream, self.server.create_initialization_options()
-                )
+            try:
+                async with stdio_server() as (read_stream, write_stream):
+                    await self.server.run(
+                        read_stream, write_stream, self.server.create_initialization_options()
+                    )
+            except (BrokenPipeError, ConnectionError, OSError) as e:
+                logger.info(f"Stdio connection closed: {e}")
+                sys.exit(0)
+            except Exception as e:
+                logger.error(f"Unexpected error in stdio mode: {e}", exc_info=True)
+                sys.exit(1)
+            else:
+                logger.info("Stdio connection closed normally, terminating process")
+                sys.exit(0)
         elif self.transport_type in ["sse", "http", "http+sse"]:
             # 检查SSE依赖
             if self.transport_type in ["sse", "http+sse"] and not SSE_AVAILABLE:
@@ -358,7 +407,7 @@ class MCPServer:
                                     "resources": {"subscribe": False, "listChanged": False},
                                     "prompts": {"listChanged": False},
                                 },
-                                "serverInfo": {"name": self.name, "version": "1.0.0"},
+                                "serverInfo": {"name": self.name, "version": __version__},
                             }
                             logger.info("MCP session initialized via HTTP")
                             return JSONResponse(
@@ -388,46 +437,8 @@ class MCPServer:
                         if method == "ping":
                             return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": {}})
 
-                        # 处理 tools/list
-                        if method == "tools/list":
-                            logger.info("HTTP MCP: Listing tools")
-                            tools = await self._list_tools_impl()
-                            # 排除 None 值，只返回有实际内容的字段
-                            result = {
-                                "tools": [tool.model_dump(exclude_none=True) for tool in tools]
-                            }
-                            logger.info(f"HTTP MCP: Returning {len(tools)} tools")
-
-                        # 处理 tools/call
-                        elif method == "tools/call":
-                            tool_name = params.get("name")
-                            arguments = params.get("arguments", {})
-                            logger.info(f"HTTP MCP: Calling tool {tool_name}")
-                            call_result = await self._call_tool_impl(tool_name, arguments)
-                            result = {"content": [c.model_dump() for c in call_result]}
-                            logger.info(f"HTTP MCP: Tool {tool_name} returned successfully")
-
-                        # 处理 resources/list
-                        elif method == "resources/list":
-                            result = {"resources": []}
-
-                        # 处理 prompts/list
-                        elif method == "prompts/list":
-                            result = {"prompts": []}
-
-                        else:
-                            return JSONResponse(
-                                {
-                                    "jsonrpc": "2.0",
-                                    "id": request_id,
-                                    "error": {
-                                        "code": -32601,
-                                        "message": f"Method not found: {method}",
-                                    },
-                                },
-                                status_code=400,
-                            )
-
+                        # 处理其他方法
+                        result = await self._handle_http_method(method, params)
                         return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
 
                     except Exception as e:
